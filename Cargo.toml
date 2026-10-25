@@ -10,3 +10,4 @@ keywords = ["ssh", "sftp", "network", "automation"]
 categories = ["network-programming"]
 
 [dependencies]
+thiserror = "2"
