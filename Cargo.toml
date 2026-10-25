@@ -1,0 +1,12 @@
+[package]
+name = "jato"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "SSH connections to hosts and network devices"
+repository = "https://github.com/bwks/jato-lib"
+readme = "README.md"
+keywords = ["ssh", "sftp", "network", "automation"]
+categories = ["network-programming"]
+
+[dependencies]
