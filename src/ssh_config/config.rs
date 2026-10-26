@@ -15,7 +15,8 @@ const SYSTEM_CONFIG_DIR: &str = "/etc/ssh";
 ///
 /// Supported: `Host` blocks with wildcards and negation, `Include`, `HostName`, `Port`,
 /// `User`, `IdentityFile`, `IdentitiesOnly`, `ProxyJump`, `StrictHostKeyChecking`,
-/// `UserKnownHostsFile`, `GlobalKnownHostsFile`, `ConnectTimeout`, and algorithm lists that add legacy algorithms
+/// `UserKnownHostsFile`, `GlobalKnownHostsFile`, `ConnectTimeout`, `ServerAliveInterval`,
+/// `ServerAliveCountMax`, and algorithm lists that add legacy algorithms
 /// (which allow them for the host). Other keywords, and `Match` blocks, are logged as
 /// unsupported and ignored.
 #[derive(Clone, Debug)]
@@ -101,18 +102,15 @@ impl SshConfig {
 
 impl Route {
     /// Connect to the target through the jump hosts, with hops made by
-    /// [`HostConfig::hop`]. A `ConnectTimeout` configured for the target replaces
-    /// `options.connect_timeout`.
+    /// [`HostConfig::hop`] and `options` as the target's configuration adjusts them
+    /// ([`HostConfig::connect_options`]).
     ///
     /// # Errors
     ///
     /// As for [`Session::connect_via`].
     pub async fn connect(&self, options: &ConnectOptions) -> Result<Session, Error> {
         let jumps: Vec<_> = self.jumps.iter().map(HostConfig::hop).collect();
-        let mut options = options.clone();
-        if let Some(timeout) = self.target.connect_timeout {
-            options.connect_timeout = timeout;
-        }
+        let options = self.target.connect_options(options);
         Session::connect_via(&jumps, &self.target.hop(), &options).await
     }
 }

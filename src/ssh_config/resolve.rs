@@ -46,8 +46,6 @@ const HARMLESS_KEYWORDS: &[&str] = &[
     "loglevel",
     "requesttty",
     "sendenv",
-    "serveralivecountmax",
-    "serveraliveinterval",
     "setenv",
     "tcpkeepalive",
     "updatehostkeys",
@@ -117,6 +115,10 @@ pub struct HostConfig {
     pub global_known_hosts: Vec<PathBuf>,
     /// The time limit for connecting (`ConnectTimeout`).
     pub connect_timeout: Option<Duration>,
+    /// How often to send keepalives (`ServerAliveInterval`); zero turns them off.
+    pub server_alive_interval: Option<Duration>,
+    /// How many keepalives may go unanswered (`ServerAliveCountMax`).
+    pub server_alive_count_max: Option<usize>,
     /// Whether an algorithm list adds legacy algorithms, such as `+ssh-rsa`.
     pub legacy_algorithms: bool,
     /// Keywords that applied but that Jato does not support, such as `ProxyCommand`.
@@ -251,6 +253,20 @@ pub(crate) fn resolve_host(
         }
         None => None,
     };
+    let server_alive_interval = match first("serveraliveinterval") {
+        Some(entry) => Some(Duration::from_secs(one(entry)?.parse().map_err(|_| {
+            at(entry, "ServerAliveInterval must be a number of seconds")
+        })?)),
+        None => None,
+    };
+    let server_alive_count_max = match first("serveralivecountmax") {
+        Some(entry) => Some(
+            one(entry)?
+                .parse()
+                .map_err(|_| at(entry, "ServerAliveCountMax must be a number"))?,
+        ),
+        None => None,
+    };
     let mut legacy_algorithms = false;
     for entry in found
         .iter()
@@ -279,6 +295,8 @@ pub(crate) fn resolve_host(
         known_hosts,
         global_known_hosts,
         connect_timeout,
+        server_alive_interval,
+        server_alive_count_max,
         legacy_algorithms,
         unsupported,
     })
@@ -324,6 +342,8 @@ fn is_supported(keyword: &str) -> bool {
             | "userknownhostsfile"
             | "globalknownhostsfile"
             | "connecttimeout"
+            | "serveraliveinterval"
+            | "serveralivecountmax"
     ) || ALGORITHM_KEYWORDS.contains(&keyword)
 }
 
@@ -715,6 +735,28 @@ Host node.lab
     }
 
     #[test]
+    fn keepalives_are_read() {
+        let config = entries(
+            "
+Host on
+    ServerAliveInterval 15
+    ServerAliveCountMax 5
+Host off
+    ServerAliveInterval 0
+",
+        );
+        let on = resolve_host(&config, "on", &local()).unwrap();
+        assert_eq!(on.server_alive_interval, Some(Duration::from_secs(15)));
+        assert_eq!(on.server_alive_count_max, Some(5));
+        assert!(on.unsupported.is_empty(), "{:?}", on.unsupported);
+        let off = resolve_host(&config, "off", &local()).unwrap();
+        assert_eq!(off.server_alive_interval, Some(Duration::ZERO));
+        assert_eq!(off.server_alive_count_max, None);
+        let unset = resolve_host(&config, "other", &local()).unwrap();
+        assert_eq!(unset.server_alive_interval, None);
+    }
+
+    #[test]
     fn host_key_checking_and_timeouts_are_read() {
         let config = entries(
             "
@@ -777,13 +819,13 @@ Host x
     ForwardAgent yes
 Host *
     ForwardAgent no
-    ServerAliveInterval 30
+    Compression yes
 ",
         );
         let host = resolve_host(&config, "x", &local()).unwrap();
         assert_eq!(
             host.unsupported,
-            ["proxycommand", "forwardagent", "serveraliveinterval"]
+            ["proxycommand", "forwardagent", "compression"]
         );
     }
 

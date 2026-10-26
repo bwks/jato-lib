@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::shared::node::Node;
 use crate::ssh::auth::Auth;
-use crate::ssh::connect::Hop;
+use crate::ssh::connect::{ConnectOptions, Hop};
 use crate::ssh::host_key::{HostKeyPolicy, KnownHosts};
 use crate::ssh_config::resolve::{HostConfig, StrictHostKeyChecking};
 
@@ -56,6 +56,22 @@ impl HostConfig {
         }
     }
 
+    /// `base` with this host's `ConnectTimeout`, `ServerAliveInterval` (zero turns keepalives
+    /// off) and `ServerAliveCountMax` in place of its own, where they are set.
+    pub fn connect_options(&self, base: &ConnectOptions) -> ConnectOptions {
+        let mut options = base.clone();
+        if let Some(timeout) = self.connect_timeout {
+            options.connect_timeout = timeout;
+        }
+        if let Some(interval) = self.server_alive_interval {
+            options.keepalive_interval = (!interval.is_zero()).then_some(interval);
+        }
+        if let Some(max) = self.server_alive_count_max {
+            options.keepalive_max = max;
+        }
+        options
+    }
+
     /// A [`Hop`] with these settings, allowing legacy algorithms if the configuration adds
     /// them.
     pub fn hop(&self) -> Hop {
@@ -71,6 +87,8 @@ impl HostConfig {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+
+    use std::time::Duration;
 
     use super::*;
     use crate::ssh::auth::Attempt;
@@ -91,6 +109,8 @@ mod tests {
             ],
             global_known_hosts: vec![PathBuf::from("/etc/ssh/ssh_known_hosts")],
             connect_timeout: None,
+            server_alive_interval: None,
+            server_alive_count_max: None,
             legacy_algorithms: false,
             unsupported: Vec::new(),
         }
@@ -148,6 +168,27 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn configured_timeouts_and_keepalives_replace_the_defaults() {
+        let base = ConnectOptions::default();
+        let unchanged = config().connect_options(&base);
+        assert_eq!(unchanged.connect_timeout, base.connect_timeout);
+        assert_eq!(unchanged.keepalive_interval, base.keepalive_interval);
+        assert_eq!(unchanged.keepalive_max, base.keepalive_max);
+
+        let mut configured = config();
+        configured.connect_timeout = Some(Duration::from_secs(7));
+        configured.server_alive_interval = Some(Duration::from_secs(15));
+        configured.server_alive_count_max = Some(5);
+        let options = configured.connect_options(&base);
+        assert_eq!(options.connect_timeout, Duration::from_secs(7));
+        assert_eq!(options.keepalive_interval, Some(Duration::from_secs(15)));
+        assert_eq!(options.keepalive_max, 5);
+
+        configured.server_alive_interval = Some(Duration::ZERO);
+        assert_eq!(configured.connect_options(&base).keepalive_interval, None);
     }
 
     #[test]

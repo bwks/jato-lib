@@ -142,6 +142,12 @@ impl Sshd {
         path
     }
 
+    /// Freeze the server, as a dead network path looks: connections stay open but nothing
+    /// answers.
+    pub fn pause(&self) {
+        docker(&["pause", &self.container]);
+    }
+
     /// Start an ssh-agent holding the unencrypted test key.
     pub fn agent(&self) -> Agent {
         let socket = self.dir.join("agent.sock");
@@ -189,6 +195,11 @@ impl Drop for Network {
 
 impl Drop for Sshd {
     fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args(["unpause", &self.container])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
         let _ = Command::new("docker")
             .args(["rm", "-f", &self.container])
             .stdout(Stdio::null())

@@ -131,6 +131,12 @@ fn jato_view(host: &HostConfig) -> HashMap<&'static str, String> {
     if !jumps.is_empty() {
         view.insert("proxyjump", jumps.join(","));
     }
+    if let Some(interval) = host.server_alive_interval {
+        view.insert("serveraliveinterval", interval.as_secs().to_string());
+    }
+    if let Some(max) = host.server_alive_count_max {
+        view.insert("serveralivecountmax", max.to_string());
+    }
     view
 }
 
@@ -238,6 +244,8 @@ Host r1 *.lab !core.lab
     StrictHostKeyChecking accept-new
     UserKnownHostsFile ~/kh1 /tmp/kh2
     ConnectTimeout 7
+    ServerAliveInterval 15
+    ServerAliveCountMax 4
     IdentityFile /keys/one
 
 Host lab-node

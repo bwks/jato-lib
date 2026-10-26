@@ -2,6 +2,8 @@
 use std::fs;
 use std::time::Duration;
 
+#[cfg(unix)]
+use crate::support::agent_proxy::AgentProxy;
 use crate::support::sshd::{PASSPHRASE, PASSWORD, Sshd, USER};
 use jato::{Auth, ConnectOptions, Error, Hop, HostKeyPolicy, Node, Secret, Session};
 
@@ -99,6 +101,18 @@ async fn agent_login() {
     let sshd = Sshd::start();
     let agent = sshd.agent();
     let auth = Auth::new(USER).agent_socket(&agent.socket);
+    connect(&sshd, auth, strict(&sshd)).await.unwrap();
+}
+
+/// The OpenSSH agent on Windows closes the connection when asked to bind it to the session.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore]
+async fn agent_login_when_the_agent_hangs_up_on_session_bind() {
+    let sshd = Sshd::start();
+    let agent = sshd.agent();
+    let proxy = AgentProxy::without_extensions(sshd.dir.join("proxy.sock"), &agent.socket);
+    let auth = Auth::new(USER).agent_socket(&proxy.socket);
     connect(&sshd, auth, strict(&sshd)).await.unwrap();
 }
 

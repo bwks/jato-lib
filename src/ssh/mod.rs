@@ -1,5 +1,6 @@
 //! The SSH connection and its channels: connecting through jump hosts, logging in, checking
 //! host keys, choosing algorithms, and running commands and shells.
+pub(crate) mod agent;
 pub(crate) mod algorithms;
 pub(crate) mod auth;
 pub(crate) mod channel;

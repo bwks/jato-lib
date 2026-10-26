@@ -20,6 +20,11 @@ use crate::ssh::host_key::{self, HostKeyPolicy};
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long to wait for authentication to finish, by default.
 const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often a keepalive is sent to a quiet server, by default.
+const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+/// How many keepalives in a row may go unanswered, by default, before the connection is
+/// given up as lost.
+const DEFAULT_KEEPALIVE_MAX: usize = 3;
 /// The originator a tunnel through a jump host reports, as OpenSSH's `ProxyJump` does.
 const TUNNEL_ORIGINATOR_ADDRESS: &str = "127.0.0.1";
 /// The originator port a tunnel through a jump host reports.
@@ -42,6 +47,13 @@ pub struct ConnectOptions {
     pub connect_timeout: Duration,
     /// The time limit for authentication, across every credential tried.
     pub auth_timeout: Duration,
+    /// How often to send a keepalive when the server has been quiet, as OpenSSH's
+    /// `ServerAliveInterval`; `None` sends none. 30 seconds by default, so a dead network
+    /// path is noticed even while a long command prints nothing.
+    pub keepalive_interval: Option<Duration>,
+    /// How many keepalives in a row may go unanswered before the connection is given up as
+    /// lost, as OpenSSH's `ServerAliveCountMax`; 3 by default.
+    pub keepalive_max: usize,
 }
 
 /// An authenticated SSH connection, possibly through jump hosts. Dropping it closes the
@@ -100,6 +112,8 @@ impl Default for ConnectOptions {
         Self {
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             auth_timeout: DEFAULT_AUTH_TIMEOUT,
+            keepalive_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
+            keepalive_max: DEFAULT_KEEPALIVE_MAX,
         }
     }
 }
@@ -226,7 +240,7 @@ async fn open_hop(
     hop: &Hop,
     options: &ConnectOptions,
 ) -> Result<Handle<Client>, Error> {
-    let handshake = handshake(via, hop);
+    let handshake = handshake(via, hop, options);
     let mut handle = within(options.connect_timeout, "connect", &hop.node, handshake).await?;
     let login = auth::authenticate(&mut handle, &hop.auth, &hop.node, hop.legacy_algorithms);
     within(options.auth_timeout, "authentication", &hop.node, login).await?;
@@ -236,7 +250,11 @@ async fn open_hop(
 
 /// Reach `hop`, over TCP or through a tunnel from the jump host `via`, run the SSH handshake
 /// and check the host key.
-async fn handshake(via: Option<&Jump>, hop: &Hop) -> Result<Handle<Client>, Error> {
+async fn handshake(
+    via: Option<&Jump>,
+    hop: &Hop,
+    options: &ConnectOptions,
+) -> Result<Handle<Client>, Error> {
     let algorithms = algorithms::preferred(hop.legacy_algorithms);
     let host_keys =
         host_key::preferred_algorithms(&hop.host_key, &hop.node, &algorithms.key).await?;
@@ -245,6 +263,8 @@ async fn handshake(via: Option<&Jump>, hop: &Hop) -> Result<Handle<Client>, Erro
             key: Cow::Owned(host_keys),
             ..algorithms
         },
+        keepalive_interval: options.keepalive_interval,
+        keepalive_max: options.keepalive_max,
         ..Config::default()
     };
     let client = Client {

@@ -10,6 +10,7 @@ mod devices;
 mod exec;
 mod hosts;
 mod jump;
+mod keepalive;
 mod posix;
 mod scp;
 mod sftp;

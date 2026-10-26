@@ -34,6 +34,7 @@ graph LR
         HostKeyChanged
         HostKeyRevoked
         AuthFailed
+        ConnectionLost
         Protocol
         Io
     end
@@ -66,6 +67,7 @@ graph LR
 | `HostKeyUnknown`, `HostKeyChanged`, `HostKeyRevoked` | The host key check refuses the server; they give the key's fingerprint, and the `known_hosts` files checked (unknown) or the file and line that refused it (changed, revoked) |
 | `AuthFailed` | No credential is accepted; lists each attempt and why credentials were skipped |
 | `Protocol` | The SSH protocol fails, wrapping the `russh` error |
+| `ConnectionLost` | The connection went while a command ran, for example because keepalives went unanswered |
 | `Io` | A local I/O operation fails, such as reading `known_hosts` |
 | `ExecRefused` | The server will not run a command |
 | `Scp` | A copy fails, with the remote program's message |

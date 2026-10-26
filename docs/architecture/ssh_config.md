@@ -88,7 +88,8 @@ The rules, as in OpenSSH:
 | `StrictHostKeyChecking accept-new` | `HostKeyPolicy::AcceptNew` with those files, recording in the first user file |
 | `StrictHostKeyChecking no` / `off` | `HostKeyPolicy::Insecure` |
 | An algorithm list that adds or lists a legacy algorithm (`+ssh-rsa`, `+diffie-hellman-group14-sha1` and the like) | `Hop::allow_legacy_algorithms` |
-| `ConnectTimeout` | replaces `ConnectOptions::connect_timeout` in `Route::connect` |
+| `ConnectTimeout` | replaces `ConnectOptions::connect_timeout` (`HostConfig::connect_options`) |
+| `ServerAliveInterval`, `ServerAliveCountMax` | replace `keepalive_interval` (0 turns keepalives off) and `keepalive_max` |
 
 `Route::connect` connects through the jump hosts with `Session::connect_via`. Callers who
 need more, such as a password, build hops themselves from `HostConfig::node`, `auth` and
@@ -98,7 +99,7 @@ need more, such as a password, build hops themselves from `HostConfig::node`, `a
 
 - **Unsupported keywords** are listed in `HostConfig::unsupported` and logged: at debug level
   for those that do not change where or how securely Jato connects (`SendEnv`,
-  `HashKnownHosts`, `ServerAliveInterval` and others common in system files), as a warning
+  `HashKnownHosts`, `Compression` and others common in system files), as a warning
   for the rest (`ProxyCommand`, `PreferredAuthentications`, `IdentityAgent` and others).
 - **Algorithm lists** only switch legacy algorithms on. Removing algorithms (`-list`),
   reordering (`^list`) or a replacement list without legacy algorithms is unsupported, as

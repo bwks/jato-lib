@@ -42,6 +42,22 @@ sequenceDiagram
     S-->>C: Session (target handle, jump handles kept open)
 ```
 
+## Keepalives
+
+`ConnectOptions::keepalive_interval` (30 seconds by default) sends a keepalive request when
+the server has been quiet that long, and `keepalive_max` (3) is how many may go unanswered
+before the connection is given up, as OpenSSH's `ServerAliveInterval` and
+`ServerAliveCountMax` (which OpenSSH leaves off by default; Jato turns them on, so a dead
+network path is noticed within about 90 seconds rather than at a long command's time limit).
+They are set on each hop's `russh` connection.
+
+When the connection goes while `Session::run` waits, the channel closes without an exit
+status; `run` then sees the connection closed and returns `Error::ConnectionLost` rather than
+output with an unknown exit. A test pauses the server's container (`docker pause`), which
+looks like a dead path: the connection stays open but nothing answers. With keepalives every
+second and two allowed to go unanswered, the loss is reported within seconds; without them
+the same test runs into the command's time limit.
+
 ## Jump hosts
 
 `Session::connect_via(jumps, target, options)` works like OpenSSH's `ProxyJump`. The first
@@ -151,8 +167,40 @@ or SHA-256 if it lists none. SHA-1 (`ssh-rsa`) is used only on a hop that allows
 algorithms, when the server lists nothing better. Other key types skip that lookup, which
 can wait up to a second.
 
-The ssh-agent is reached through `SSH_AUTH_SOCK` or a socket path, on Unix only for now. It is
-bound to the session (`session-bind@openssh.com`) when the agent supports it.
+The ssh-agent is found by `ssh::agent`. A socket given with `Auth::agent_socket` is used on
+its own. Otherwise, on Unix, `SSH_AUTH_SOCK` names the socket. On Windows, `SSH_AUTH_SOCK`
+names a pipe if it is set; otherwise the OpenSSH agent that ships with Windows
+(`\\.\pipe\openssh-ssh-agent`) is tried, then Pageant. The first that lists its keys is
+used, and if none does, the reason lists each place tried and what went wrong there. Listing
+the keys, not only connecting, decides it: the Pageant client connects even when Pageant is
+not running, and fails only when asked for keys. Which places to try is a pure function
+(`agent_endpoints`) unit-tested for both platforms; only the connecting is per platform,
+through `russh`'s Unix socket, named pipe and Pageant clients.
+
+The agent is first asked to bind to the session (`session-bind@openssh.com`), so it can
+refuse to sign for another one. The OpenSSH agent on Windows does not know this extension
+and closes the connection when asked, so after a failed bind the agent is reached again and
+used unbound. An integration test runs this against an agent that hangs up on extension
+requests.
+
+```mermaid
+flowchart TD
+    places["Places to try:<br/>agent_socket, or SSH_AUTH_SOCK,<br/>or on Windows the OpenSSH pipe, then Pageant"] --> connect[Connect]
+    connect -->|fails| next[Note why, try the next place]
+    connect --> bind["Bind to the session"]
+    bind -->|refused or hung up| again[Connect again, unbound]
+    bind --> list[List keys]
+    again --> list
+    list -->|fails| next
+    list --> keys[Try each key]
+    next --> connect
+```
+
+The OpenSSH agent on Windows keeps its keys encrypted for the user with DPAPI. In a session
+without the user's password, such as an SSH login with a key, it refuses to add keys
+(`agent refused operation`), as Windows has no key to decrypt with. A desktop session, or
+an SSH login with a password, works. This has been run on Windows Server 2022: Jato found the
+agent with no `SSH_AUTH_SOCK` set and logged in with a key held only by the agent.
 
 ## Secrets
 

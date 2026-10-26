@@ -5,14 +5,13 @@ use russh::MethodKind;
 use russh::MethodSet;
 use russh::client::{AuthResult, Handle, Handler, KeyboardInteractiveAuthResponse, Prompt};
 use russh::keys::agent::AgentIdentity;
-#[cfg(unix)]
-use russh::keys::agent::client::AgentClient;
 use russh::keys::{Algorithm, HashAlg, PrivateKeyWithHashAlg, decode_secret_key};
 use tokio::fs;
 
 use crate::shared::error::Error;
 use crate::shared::node::Node;
 use crate::shared::secret::Secret;
+use crate::ssh::agent::{OpenAgent, open_agent};
 
 /// The default identity files, in the order they are tried, under the user's `~/.ssh`.
 pub(crate) const DEFAULT_IDENTITY_FILES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
@@ -90,13 +89,16 @@ impl Auth {
         &self.username
     }
 
-    /// Try each key the running ssh-agent offers, found through `SSH_AUTH_SOCK`.
+    /// Try each key the running ssh-agent offers. On Unix the agent is found through
+    /// `SSH_AUTH_SOCK`. On Windows, `SSH_AUTH_SOCK` names a pipe if it is set; otherwise the
+    /// OpenSSH agent's pipe (`\\.\pipe\openssh-ssh-agent`) is tried, then Pageant.
     pub fn agent(mut self) -> Self {
         self.credentials.push(Credential::Agent(None));
         self
     }
 
-    /// Try each key offered by the ssh-agent listening on `socket`.
+    /// Try each key offered by the ssh-agent listening on `socket`: a Unix socket, or on
+    /// Windows a named pipe.
     pub fn agent_socket(mut self, socket: impl Into<PathBuf>) -> Self {
         self.credentials
             .push(Credential::Agent(Some(socket.into())));
@@ -342,33 +344,23 @@ fn rsa_signature_hash(listed: Option<HashAlg>, legacy_algorithms: bool) -> Optio
     }
 }
 
-/// Log in with each key an ssh-agent offers, through `socket` or `SSH_AUTH_SOCK`.
-#[cfg(unix)]
+/// Log in with each key an ssh-agent offers, through `socket` or where the platform keeps
+/// one (see [`open_agent`]).
 async fn try_agent<H: Handler>(
     handle: &mut Handle<H>,
     login: &Login<'_>,
     socket: Option<&Path>,
 ) -> Result<Outcome, russh::Error> {
-    let connected = match socket {
-        Some(socket) => AgentClient::connect_uds(socket).await,
-        None => AgentClient::connect_env().await,
-    };
-    let mut agent = match connected {
+    let OpenAgent {
+        client: mut agent,
+        identities,
+    } = match open_agent(socket, handle.agent_session_binding()).await {
         Ok(agent) => agent,
-        Err(error) => {
+        Err(reason) => {
             return Ok(Outcome::Unusable(format!(
-                "could not reach the agent: {error}"
+                "could not use the agent: {reason}"
             )));
         }
-    };
-    if let Some(binding) = handle.agent_session_binding()
-        && let Err(error) = agent.bind_session(binding, false).await
-    {
-        tracing::debug!(%error, "ssh-agent did not bind to the session");
-    }
-    let identities = match agent.request_identities().await {
-        Ok(identities) => identities,
-        Err(error) => return Ok(Outcome::Unusable(format!("could not list keys: {error}"))),
     };
     let mut last = Outcome::Unusable("the agent holds no keys".into());
     for identity in identities {
@@ -395,18 +387,6 @@ async fn try_agent<H: Handler>(
         }
     }
     Ok(last)
-}
-
-/// ssh-agent is reached through a Unix socket, so it is not available elsewhere yet.
-#[cfg(not(unix))]
-async fn try_agent<H: Handler>(
-    _handle: &mut Handle<H>,
-    _login: &Login<'_>,
-    _socket: Option<&Path>,
-) -> Result<Outcome, russh::Error> {
-    Ok(Outcome::Unusable(
-        "ssh-agent is supported only on Unix".into(),
-    ))
 }
 
 /// Log in with keyboard-interactive authentication, answering each hidden prompt with

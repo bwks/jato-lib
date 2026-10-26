@@ -58,6 +58,26 @@ flowchart LR
     end
 ```
 
+`support::agent_proxy` (Unix only) stands in front of a test ssh-agent and closes the
+connection on extension requests, as the OpenSSH agent on Windows does, so the agent code's
+handling of that runs on Linux too.
+
+## Windows
+
+The unit tests and clippy run on Windows; the container tests need Docker and Unix tools, so
+they run on Linux. Building on Windows needs the Visual Studio C++ build tools. `aws-lc-sys`
+(the crypto library under `russh`) also wants NASM, or `AWS_LC_SYS_PREBUILT_NASM=1` to use
+the assembly it ships prebuilt:
+
+```text
+$env:AWS_LC_SYS_PREBUILT_NASM = "1"
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+Logging in through the Windows OpenSSH agent has been run by hand on a Windows Server 2022
+Sherpa lab node; see [connecting.md](connecting.md) for what was found.
+
 ## Real devices and hosts
 
 Device and host tests need targets, given by environment variables with a prefix per kind

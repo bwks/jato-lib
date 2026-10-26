@@ -115,7 +115,9 @@ impl Session {
     /// # Errors
     ///
     /// [`Error::Timeout`] if the command has not finished within `timeout`; the channel is
-    /// closed, which ends the command on most servers. Otherwise as for [`Session::exec`].
+    /// closed, which ends the command on most servers. [`Error::ConnectionLost`] if the
+    /// connection goes before the command ends, for example because keepalives went
+    /// unanswered. Otherwise as for [`Session::exec`].
     #[tracing::instrument(skip(self, command, stdin), fields(node = %self.node(), stdin = stdin.len()), level = "debug")]
     pub async fn run(
         &self,
@@ -189,7 +191,7 @@ async fn run_to_end(session: &Session, command: &str, stdin: &[u8]) -> Result<Ou
     let mut fed = false;
     loop {
         tokio::select! {
-            output = &mut collecting => return Ok(output),
+            output = &mut collecting => return finished(session, output),
             result = &mut feeding, if !fed => {
                 fed = true;
                 if let Err(error) = result {
@@ -198,6 +200,17 @@ async fn run_to_end(session: &Session, command: &str, stdin: &[u8]) -> Result<Ou
             }
         }
     }
+}
+
+/// The command's output, or [`Error::ConnectionLost`] if the channel closed because the
+/// connection went, without the command's exit status.
+fn finished(session: &Session, output: Output) -> Result<Output, Error> {
+    if output.exit == Exit::Unknown && session.handle().is_closed() {
+        return Err(Error::ConnectionLost {
+            node: session.node().clone(),
+        });
+    }
+    Ok(output)
 }
 
 /// Write `stdin` to the channel, then end of file.

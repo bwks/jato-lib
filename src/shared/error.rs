@@ -184,6 +184,14 @@ pub enum Error {
         message: String,
     },
 
+    /// The connection to a server was lost while a command ran, for example because
+    /// keepalives went unanswered.
+    #[error("{node}: the connection was lost")]
+    ConnectionLost {
+        /// The server.
+        node: Node,
+    },
+
     /// The SSH protocol failed with a server.
     #[error("SSH protocol error with {node}")]
     Protocol {
