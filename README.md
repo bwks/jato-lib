@@ -6,7 +6,8 @@ Jato connects to hosts and network devices over SSH. It is built on
 checked against OpenSSH's `known_hosts` unless you opt out.
 
 Jato is in early development; the plan for v1 is
-[issue #1](https://github.com/bwks/jato-lib/issues/1).
+[issue #1](https://github.com/bwks/jato-lib/issues/1). How it is built is described in
+[docs/architecture](docs/architecture/README.md).
 
 ## Supported so far
 

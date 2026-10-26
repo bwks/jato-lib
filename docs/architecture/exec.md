@@ -33,6 +33,26 @@ without reading it. If no exit status or signal was sent, `Output::exit` is
 Every `run` takes a time limit for the whole command. When it runs out, the channel is
 dropped, which closes it, and `Error::Timeout` names the `command` operation.
 
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant R as Session::run
+    participant S as Server
+    C->>R: command, stdin, timeout
+    R->>S: open session channel, exec (want reply)
+    S-->>R: Success
+    par feed
+        R->>S: stdin data, then EOF
+    and collect
+        S-->>R: stdout, stderr, exit status or signal
+    end
+    S-->>R: Close
+    R-->>C: Output { stdout, stderr, exit }
+```
+
+Collecting ends the call when the channel closes; feeding is dropped then if it has not
+finished, which is how a command that ignores its stdin does not hold `run` up.
+
 ## Secrets
 
 Commands are not logged or put in errors. They are still visible on the server (in process

@@ -21,8 +21,9 @@ own right.
 - Public items must have doc comments. Document errors, panics (there should be none), and
   security-relevant behaviour such as host key checking and secret handling.
 - Keep `README.md` current with supported features and a short usage example.
-- Design notes go in `docs/`. When you change how a part of the library works, update the
-  matching document there, or add one.
+- Architecture and design notes go in `docs/architecture/`, indexed in its `README.md`. When
+  you change how a part of the library works, update the matching document there, or add one
+  and list it in the index. Use diagrams (mermaid or ASCII) where they help.
 
 ## Git and Pull Requests
 - Prefer local branches rather than worktrees.

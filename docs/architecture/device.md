@@ -46,6 +46,25 @@ OpenBSD and Alpine). That starts a new shell with a prompt of its own, so the pr
 4. Otherwise runs the prompt setup in the new shell, discovers its prompt (`[jato]# `), and
    rebuilds the mode prompts.
 
+```mermaid
+sequenceDiagram
+    participant D as Device::enable
+    participant S as Shell ([jato]$)
+    D->>S: sudo -s
+    S-->>D: [sudo] password for user:
+    D->>S: secret (not logged)
+    alt refused
+        S-->>D: password prompt again
+        D->>S: empty lines until sudo gives up
+        D-->>D: error, still User
+    else accepted
+        S-->>D: root shell's own prompt
+        D->>S: prompt setup (PS1)
+        D->>S: discover the prompt: [jato]#
+        D-->>D: Privileged
+    end
+```
+
 `disable` leaves privileged mode with the profile's disable command, `exit` for
 `posix_shell`, back to the user's shell and its `[jato]$ ` prompt. It does nothing in user
 mode. It only leaves shells that `enable` started: if the session has been root since login,
@@ -69,9 +88,41 @@ stays privileged. `enable` likewise does nothing on a device that is already pri
    not fit the profile is `Error::InvalidPrompt`, quoting it.
 5. Runs the setup commands.
 
+```mermaid
+flowchart TD
+    open[Device::open] --> shell[Open a PTY shell]
+    shell --> banner[Read until output pauses<br/>login banner]
+    banner --> setup{Prompt setup?}
+    setup -->|posix_shell: set PS1| quiet[Read until output pauses]
+    setup -->|none| discover
+    quiet --> discover[Discover the prompt]
+    discover --> build["Split it into base + marker,<br/>build each mode's prompt from the base"]
+    build --> fits{Fits the profile?}
+    fits -->|no| invalid[InvalidPrompt]
+    fits -->|yes| mode[Note the mode]
+    mode --> commands[Run setup commands<br/>paging off, width]
+    commands --> ready[Ready]
+```
+
 Every exchange after that sends a line, reads until any mode prompt once the line's echo has
 arrived in full (so a prompt-like piece of the echo, or a stale prompt, is not taken for the
 end of the output), and updates the mode from the prompt it ends on.
+
+## Modes
+
+```mermaid
+stateDiagram-v2
+    [*] --> User: prompt shows user mode
+    [*] --> Privileged: prompt shows privileged mode
+    User --> Privileged: enable
+    Privileged --> User: disable
+    Privileged --> Config: send_config enters
+    Config --> Privileged: end (always, even after an error)
+```
+
+Junos and NX-OS have no user mode in practice: `enable` and `disable` do nothing there. A
+`posix_shell` has no configuration mode. Every exchange updates the mode from the prompt it
+ends on, so a command that changes mode is followed.
 
 ## Commands and configuration
 

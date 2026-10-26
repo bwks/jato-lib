@@ -25,6 +25,21 @@ A line of output (not the echo) that looks exactly like the prompt and arrives a
 a packet still ends the read early; this is inherent in prompt matching, and an exact,
 discovered prompt makes it unlikely.
 
+How a read ends:
+
+```mermaid
+flowchart TD
+    start[Read] --> check{"Last line received<br/>matches the prompt?"}
+    check -->|no| wait[Wait for more output]
+    check -->|yes| echo{"Command's echo<br/>received in full?<br/>(Shell::command only)"}
+    echo -->|yes| done[Return everything received]
+    echo -->|no| wait
+    wait -->|data| check
+    wait -->|channel closed| closed[ShellClosed]
+    wait -->|time limit, at a prompt| noecho[EchoNotSeen]
+    wait -->|time limit| notfound[PromptNotFound]
+```
+
 ## Discovering the prompt
 
 When the prompt is not known, `Shell::read_until_quiet` reads until output arrives and then
@@ -32,6 +47,14 @@ pauses for a given idle time, and `Shell::discover_prompt` sends empty lines unt
 end on the same, non-empty line (at most five tries), which it returns. `Prompt::literal`
 matches that text exactly. A device's banner should be read first, so its last line is not
 taken for the prompt.
+
+```text
+ Jato                      Device
+  │ ── "\n" ──────────────▶ │
+  │ ◀── "...\r\nrouter1#" ─ │   last line "router1#"   (first)
+  │ ── "\n" ──────────────▶ │
+  │ ◀── "\r\nrouter1#" ──── │   last line "router1#"   same twice → the prompt
+```
 
 ## Commands
 

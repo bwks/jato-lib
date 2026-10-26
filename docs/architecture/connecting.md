@@ -19,6 +19,29 @@ For each hop, in order:
 Steps 1 and 2 share `ConnectOptions::connect_timeout`; step 3 has
 `ConnectOptions::auth_timeout`. Either one running out gives `Error::Timeout`.
 
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant S as Session::connect_via
+    participant R as russh
+    participant K as host_key
+    participant A as auth
+    C->>S: jumps, target, options
+    loop each hop (jumps, then target)
+        S->>K: preferred_algorithms (recorded key types first)
+        alt first hop
+            S->>R: TCP connect, then connect_stream
+        else later hop
+            S->>R: direct-tcpip channel on the previous hop, then connect_stream over it
+        end
+        R->>K: check_server_key (Client handler)
+        K-->>R: accept, or Strict/AcceptNew refusal
+        S->>A: authenticate (attempts in order)
+        A->>R: agent / key / keyboard-interactive / password
+    end
+    S-->>C: Session (target handle, jump handles kept open)
+```
+
 ## Jump hosts
 
 `Session::connect_via(jumps, target, options)` works like OpenSSH's `ProxyJump`. The first
@@ -57,6 +80,21 @@ hashes count as the RSA key type. `Insecure` keeps `russh`'s default order.
 `AcceptNew` appends a plain `host key` line for an unknown server, creating the file and
 directory if needed. `Strict` never writes.
 
+```mermaid
+flowchart TD
+    key[Key offered by the server] --> revoked{"@revoked line<br/>for this key?"}
+    revoked -->|yes| Revoked[HostKeyRevoked]
+    revoked -->|no| entries{"Entries for this host?"}
+    entries -->|none| unknown{Policy}
+    entries -->|some| match{"Any entry with<br/>this key?"}
+    match -->|yes| Known[Accepted]
+    match -->|no| Changed[HostKeyChanged]
+    unknown -->|Strict| Unknown[HostKeyUnknown]
+    unknown -->|AcceptNew| Record[Record it, accept]
+```
+
+`Insecure` skips all of this and accepts any key.
+
 ## Algorithms
 
 `algorithms::preferred` picks what is offered in the handshake. By default these are
@@ -78,6 +116,16 @@ by unit tests.
 ## Authentication
 
 `Auth::attempts` turns the credentials into attempts, in the order they were added:
+
+```mermaid
+flowchart LR
+    agent["agent()"] --> a1[each agent key]
+    defaults["default_identities()"] --> a2["~/.ssh/id_ed25519, id_ecdsa, id_rsa<br/>(those that exist)"]
+    file["key_file(path)"] --> a3[the key file, once]
+    mem["key(secret)"] --> a4[the in-memory key]
+    pw["password(secret)"] --> a5[keyboard-interactive] --> a6[password]
+```
+
 
 - A password becomes keyboard-interactive, then password. Network devices often accept only
   keyboard-interactive. Hidden prompts are answered with the password; echoed prompts get

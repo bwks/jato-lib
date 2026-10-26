@@ -29,6 +29,33 @@ as some network devices do not, counts as success.
 Lines from the server are limited to 4 KiB, and a download reserves at most 1 MiB up front,
 whatever size the server announces. Directories (`D` headers) are refused.
 
+```mermaid
+sequenceDiagram
+    participant J as Jato
+    participant R as scp -t path (remote)
+    Note over J,R: upload
+    R-->>J: 0 (ready)
+    J->>R: C0600 size name
+    R-->>J: 0
+    J->>R: content, then 0
+    R-->>J: 0, or 1/2 + message
+    J->>R: EOF
+    R-->>J: exit status
+```
+
+```mermaid
+sequenceDiagram
+    participant J as Jato
+    participant R as scp -f path (remote)
+    Note over J,R: download
+    J->>R: 0
+    R-->>J: C0644 size name, or 1/2 + message
+    J->>R: 0
+    R-->>J: content, then 0
+    J->>R: 0, then EOF
+    R-->>J: exit status
+```
+
 ## Paths and quoting
 
 The path goes on the remote command line. It is shell-quoted only when it holds characters
