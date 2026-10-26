@@ -16,8 +16,9 @@ Jato is in early development; the plan for v1 is
 - Authentication, tried in the order you add credentials: ssh-agent, key files (encrypted
   ones with a passphrase), the default identities in `~/.ssh`, private keys held in memory,
   and passwords (keyboard-interactive first, then plain password).
-- Host key checking per connection: `Strict` and `AcceptNew` against a `known_hosts` file
-  (plain, hashed, wildcard and negated entries, `@revoked` markers), or `Insecure` by choice.
+- Host key checking per connection: `Strict` and `AcceptNew` against one or more
+  `known_hosts` files (plain, hashed, wildcard and negated entries, `@revoked` markers), such
+  as a lab's own file beside `~/.ssh/known_hosts`, or `Insecure` by choice.
 - Running commands without a terminal: stdin, separate stdout and stderr, and the exit
   status or signal, collected with a time limit or streamed.
 - File transfer with Jato's own SFTP client: uploads written to a temporary file with the
@@ -30,6 +31,9 @@ Jato is in early development; the plan for v1 is
   and POSIX shells on Linux and BSD: prompts discovered on the device, paging turned off,
   `enable`, configuration with errors reported per line (committed or rolled back on Junos),
   shell exit statuses checked, `sudo`/`doas` for shells, and confirmation prompts handled.
+- Reading OpenSSH client configuration (`~/.ssh/config`, `Include`, `Host` patterns,
+  `ProxyJump` and the common keywords) into hops and routes, matching `ssh -G`; enough for
+  the configuration Sherpa writes for its labs.
 - Modern algorithms by default; older ones (SHA-1 key exchange, `ssh-rsa`, CBC ciphers,
   SHA-1 MACs) for older network devices with `Hop::allow_legacy_algorithms`.
 - Secrets are wiped from memory when dropped and never appear in `Debug` output or errors.
@@ -44,13 +48,25 @@ async fn example(home: &std::path::Path) -> Result<(), jato::Error> {
         .agent()
         .default_identities()
         .password(Secret::new(std::env::var("SWITCH_PASSWORD").unwrap_or_default()));
-    let host_key = HostKeyPolicy::Strict(home.join(".ssh/known_hosts"));
+    let host_key = HostKeyPolicy::strict(home.join(".ssh/known_hosts"));
     let hop = Hop::new(Node::new("switch01.example.net", 22), auth, host_key);
     let session = Session::connect(&hop, &ConnectOptions::default()).await?;
     let output = session
         .run("show version", b"", std::time::Duration::from_secs(30))
         .await?;
     println!("{}", String::from_utf8_lossy(&output.stdout));
+    session.close().await
+}
+```
+
+From an OpenSSH configuration instead:
+
+```rust,no_run
+use jato::{ConnectOptions, SshConfig};
+
+async fn from_config() -> Result<(), jato::Error> {
+    let route = SshConfig::load()?.route("router1.lab")?;
+    let session = route.connect(&ConnectOptions::default()).await?;
     session.close().await
 }
 ```

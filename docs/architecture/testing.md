@@ -33,7 +33,10 @@ flowchart LR
 ```
 
 `tests/sshd/` builds a Debian image with OpenSSH, `sudo` and a user `jato`
-(`docker build -t jato-test-sshd tests/sshd`). The SFTP server (`internal-sftp`) is given on
+(`docker build -t jato-test-sshd tests/sshd`). The host keys the package installs are
+removed from the image, so each container makes its own and no two share a host key; until
+that was done, every container had the same key, which hid the difference between a node and
+an impostor. The SFTP server (`internal-sftp`) is given on
 sshd's command line rather than in its config, so a test can pass its own, such as one with
 a strict umask. Password and keyboard-interactive logins are on,
 and the user may `sudo` with its password. `support::sshd::Sshd` starts one container per test

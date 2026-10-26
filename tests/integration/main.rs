@@ -14,4 +14,5 @@ mod posix;
 mod scp;
 mod sftp;
 mod shell;
+mod ssh_config;
 mod support;

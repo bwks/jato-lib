@@ -9,6 +9,7 @@ use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 
 use crate::shared::error::Error;
+use crate::shared::glob::pattern_list_matches;
 use crate::shared::node::Node;
 
 /// The port a `known_hosts` entry names without brackets.
@@ -22,15 +23,67 @@ const DEFAULT_SSH_PORT: u16 = 22;
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HostKeyPolicy {
-    /// Accept only a key recorded for the server in this OpenSSH `known_hosts` file. An
+    /// Accept only a key recorded for the server in one of these `known_hosts` files. An
     /// unknown server is refused, as with OpenSSH's `StrictHostKeyChecking yes`.
-    Strict(PathBuf),
-    /// Accept a key recorded in this `known_hosts` file. The first time a server is seen, its
-    /// key is recorded and accepted, as with OpenSSH's `StrictHostKeyChecking accept-new`.
-    AcceptNew(PathBuf),
+    Strict(KnownHosts),
+    /// Accept a key recorded in one of these `known_hosts` files. The first time a server is
+    /// seen, its key is recorded in the first file and accepted, as with OpenSSH's
+    /// `StrictHostKeyChecking accept-new`.
+    AcceptNew(KnownHosts),
     /// Accept any key without checking it. Use this only where the network path is already
     /// trusted, such as a hop inside a verified tunnel.
     Insecure,
+}
+
+/// The OpenSSH `known_hosts` files a host key is checked against, as OpenSSH checks
+/// `UserKnownHostsFile` and `GlobalKnownHostsFile`: a key recorded in any of them is known,
+/// a revocation in any of them refuses it, and new keys are recorded in the first. Missing
+/// files count as empty.
+///
+/// A file of its own per set of hosts, such as one per lab, keeps their keys apart from
+/// `~/.ssh/known_hosts`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownHosts {
+    first: PathBuf,
+    more: Vec<PathBuf>,
+}
+
+impl HostKeyPolicy {
+    /// [`HostKeyPolicy::Strict`] with one `known_hosts` file.
+    pub fn strict(file: impl Into<PathBuf>) -> Self {
+        Self::Strict(KnownHosts::new(file))
+    }
+
+    /// [`HostKeyPolicy::AcceptNew`] with one `known_hosts` file.
+    pub fn accept_new(file: impl Into<PathBuf>) -> Self {
+        Self::AcceptNew(KnownHosts::new(file))
+    }
+}
+
+impl KnownHosts {
+    /// Check `file`, where new keys are also recorded.
+    pub fn new(file: impl Into<PathBuf>) -> Self {
+        Self {
+            first: file.into(),
+            more: Vec::new(),
+        }
+    }
+
+    /// Also check `file`, after those already given.
+    pub fn also(mut self, file: impl Into<PathBuf>) -> Self {
+        self.more.push(file.into());
+        self
+    }
+
+    /// The files, in the order they are checked.
+    pub fn files(&self) -> impl Iterator<Item = &Path> {
+        std::iter::once(self.first.as_path()).chain(self.more.iter().map(PathBuf::as_path))
+    }
+
+    /// The file new keys are recorded in: the first.
+    pub fn record_file(&self) -> &Path {
+        &self.first
+    }
 }
 
 /// What a `known_hosts` file says about a server's key.
@@ -59,40 +112,65 @@ pub(crate) async fn check(
     node: &Node,
     key: &PublicKey,
 ) -> Result<(), Error> {
-    let path = match policy {
-        HostKeyPolicy::Strict(path) | HostKeyPolicy::AcceptNew(path) => path,
+    let known_hosts = match policy {
+        HostKeyPolicy::Strict(known_hosts) | HostKeyPolicy::AcceptNew(known_hosts) => known_hosts,
         HostKeyPolicy::Insecure => {
             tracing::debug!("host key accepted without checking, as the policy is insecure");
             return Ok(());
         }
     };
-    let known_hosts = read_known_hosts(path).await?;
+    let mut texts = Vec::new();
+    for file in known_hosts.files() {
+        texts.push((file, read_known_hosts(file).await?));
+    }
     let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
-    match verdict(&known_hosts, node.host(), node.port(), key) {
-        Verdict::Known => Ok(()),
-        Verdict::Unknown => match policy {
-            HostKeyPolicy::AcceptNew(_) => {
-                record(path, &known_hosts, node, key).await?;
-                tracing::info!(%fingerprint, known_hosts = %path.display(), "recorded new host key");
-                Ok(())
+    let mut changed = None;
+    let mut known = false;
+    for (file, text) in &texts {
+        match verdict(text, node.host(), node.port(), key) {
+            Verdict::Revoked { line } => {
+                return Err(Error::HostKeyRevoked {
+                    node: node.clone(),
+                    fingerprint,
+                    known_hosts: file.to_path_buf(),
+                    line,
+                });
             }
-            HostKeyPolicy::Strict(_) | HostKeyPolicy::Insecure => Err(Error::HostKeyUnknown {
-                node: node.clone(),
-                fingerprint,
-                known_hosts: path.clone(),
-            }),
-        },
-        Verdict::Changed { line } => Err(Error::HostKeyChanged {
+            Verdict::Known => known = true,
+            Verdict::Changed { line } => {
+                changed.get_or_insert((file.to_path_buf(), line));
+            }
+            Verdict::Unknown => {
+                tracing::trace!(file = %file.display(), "host not recorded in this file");
+            }
+        }
+    }
+    if known {
+        return Ok(());
+    }
+    if let Some((file, line)) = changed {
+        return Err(Error::HostKeyChanged {
             node: node.clone(),
             fingerprint,
-            known_hosts: path.clone(),
+            known_hosts: file,
             line,
-        }),
-        Verdict::Revoked { line } => Err(Error::HostKeyRevoked {
+        });
+    }
+    match policy {
+        HostKeyPolicy::AcceptNew(_) => {
+            let file = known_hosts.record_file();
+            let current = texts
+                .first()
+                .map(|(_, text)| text.as_str())
+                .unwrap_or_default();
+            record(file, current, node, key).await?;
+            tracing::info!(%fingerprint, known_hosts = %file.display(), "recorded new host key");
+            Ok(())
+        }
+        HostKeyPolicy::Strict(_) | HostKeyPolicy::Insecure => Err(Error::HostKeyUnknown {
             node: node.clone(),
             fingerprint,
-            known_hosts: path.clone(),
-            line,
+            known_hosts: known_hosts.files().map(Path::to_path_buf).collect(),
         }),
     }
 }
@@ -155,12 +233,19 @@ pub(crate) async fn preferred_algorithms(
     node: &Node,
     default: &[Algorithm],
 ) -> Result<Vec<Algorithm>, Error> {
-    let path = match policy {
-        HostKeyPolicy::Strict(path) | HostKeyPolicy::AcceptNew(path) => path,
+    let known_hosts = match policy {
+        HostKeyPolicy::Strict(known_hosts) | HostKeyPolicy::AcceptNew(known_hosts) => known_hosts,
         HostKeyPolicy::Insecure => return Ok(default.to_vec()),
     };
-    let known_hosts = read_known_hosts(path).await?;
-    let recorded = recorded_algorithms(&known_hosts, node.host(), node.port());
+    let mut recorded = Vec::new();
+    for file in known_hosts.files() {
+        let text = read_known_hosts(file).await?;
+        for algorithm in recorded_algorithms(&text, node.host(), node.port()) {
+            if !recorded.contains(&algorithm) {
+                recorded.push(algorithm);
+            }
+        }
+    }
     tracing::debug!(?recorded, "recorded host key types");
     Ok(recorded_first(default, &recorded))
 }
@@ -288,20 +373,7 @@ fn host_matches(patterns: &HostPatterns, name: &str) -> bool {
     match patterns {
         HostPatterns::HashedName { salt, hash } => hashed_name_matches(salt, hash, name),
         HostPatterns::Patterns(patterns) => {
-            let mut matched = false;
-            for pattern in patterns {
-                let pattern = pattern.to_lowercase();
-                match pattern.strip_prefix('!') {
-                    Some(negated) if glob_matches(negated.as_bytes(), name.as_bytes()) => {
-                        return false;
-                    }
-                    Some(_) => {
-                        tracing::trace!(%pattern, "negated pattern does not match");
-                    }
-                    None => matched |= glob_matches(pattern.as_bytes(), name.as_bytes()),
-                }
-            }
-            matched
+            pattern_list_matches(patterns.iter().map(String::as_str), name)
         }
     }
 }
@@ -314,22 +386,6 @@ fn hashed_name_matches(salt: &[u8], hash: &[u8], name: &str) -> bool {
             tracing::debug!(%error, "hashed known_hosts entry has an unusable salt");
             false
         }
-    }
-}
-
-/// Whether `name` matches `pattern`, where `*` matches any run of characters and `?` any one.
-fn glob_matches(pattern: &[u8], name: &[u8]) -> bool {
-    match (pattern.split_first(), name.split_first()) {
-        (Some((b'*', rest)), Some((_, name_rest))) => {
-            glob_matches(rest, name) || glob_matches(pattern, name_rest)
-        }
-        (Some((b'*', rest)), None) => glob_matches(rest, name),
-        (Some((b'?', rest)), Some((_, name_rest))) => glob_matches(rest, name_rest),
-        (Some((expected, rest)), Some((found, name_rest))) => {
-            expected == found && glob_matches(rest, name_rest)
-        }
-        (None, None) => true,
-        (Some(_), None) | (None, Some(_)) => false,
     }
 }
 
@@ -535,7 +591,7 @@ mod tests {
         let path = temp_known_hosts("preferred", &format!("switch01 {KEY_RSA}\n"));
         let default = [Algorithm::Ed25519, rsa(Some(HashAlg::Sha512))];
         let node = Node::new("switch01", 22);
-        let strict = preferred_algorithms(&HostKeyPolicy::Strict(path), &node, &default)
+        let strict = preferred_algorithms(&HostKeyPolicy::strict(path), &node, &default)
             .await
             .unwrap();
         assert_eq!(strict, vec![rsa(Some(HashAlg::Sha512)), Algorithm::Ed25519]);
@@ -548,7 +604,7 @@ mod tests {
     #[tokio::test]
     async fn strict_refuses_unknown_and_changed_keys() {
         let path = temp_known_hosts("strict", &format!("switch01 {KEY_A}\n"));
-        let policy = HostKeyPolicy::Strict(path.clone());
+        let policy = HostKeyPolicy::strict(path.clone());
         let node = Node::new("switch01", 22);
         check(&policy, &node, &key(KEY_A)).await.unwrap();
         let changed = check(&policy, &node, &key(KEY_B)).await.unwrap_err();
@@ -568,7 +624,7 @@ mod tests {
         let path = std::env::temp_dir()
             .join("jato-host-key-missing")
             .join("known_hosts");
-        let policy = HostKeyPolicy::Strict(path);
+        let policy = HostKeyPolicy::strict(path);
         let error = check(&policy, &Node::new("switch01", 22), &key(KEY_A))
             .await
             .unwrap_err();
@@ -578,7 +634,7 @@ mod tests {
     #[tokio::test]
     async fn accept_new_records_an_unknown_key_once() {
         let path = temp_known_hosts("accept-new", &format!("router01 {KEY_B}"));
-        let policy = HostKeyPolicy::AcceptNew(path.clone());
+        let policy = HostKeyPolicy::accept_new(path.clone());
         let node = Node::new("switch01", 2222);
         check(&policy, &node, &key(KEY_A)).await.unwrap();
         check(&policy, &node, &key(KEY_A)).await.unwrap();
@@ -595,7 +651,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jato-host-key-{}-create", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let path = dir.join(".ssh").join("known_hosts");
-        let policy = HostKeyPolicy::AcceptNew(path.clone());
+        let policy = HostKeyPolicy::accept_new(path.clone());
         check(&policy, &Node::new("switch01", 22), &key(KEY_A))
             .await
             .unwrap();
@@ -608,11 +664,127 @@ mod tests {
     #[tokio::test]
     async fn accept_new_still_refuses_revoked_keys() {
         let path = temp_known_hosts("revoked", &format!("@revoked * {KEY_A}\n"));
-        let policy = HostKeyPolicy::AcceptNew(path);
+        let policy = HostKeyPolicy::accept_new(path);
         let error = check(&policy, &Node::new("switch01", 22), &key(KEY_A))
             .await
             .unwrap_err();
         assert!(matches!(error, Error::HostKeyRevoked { line: 1, .. }));
+    }
+
+    #[tokio::test]
+    async fn a_key_in_any_file_is_known() {
+        let lab = temp_known_hosts("multi-lab", &format!("router01 {KEY_B}\n"));
+        let user = temp_known_hosts("multi-user", &format!("switch01 {KEY_A}\n"));
+        let policy = HostKeyPolicy::Strict(KnownHosts::new(&lab).also(&user));
+        check(&policy, &Node::new("switch01", 22), &key(KEY_A))
+            .await
+            .unwrap();
+        check(&policy, &Node::new("router01", 22), &key(KEY_B))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_changed_key_names_the_file_that_records_it() {
+        let lab = temp_known_hosts("changed-lab", "");
+        let user = temp_known_hosts("changed-user", &format!("# old\nswitch01 {KEY_B}\n"));
+        let policy = HostKeyPolicy::Strict(KnownHosts::new(&lab).also(&user));
+        let error = check(&policy, &Node::new("switch01", 22), &key(KEY_A))
+            .await
+            .unwrap_err();
+        let Error::HostKeyChanged {
+            known_hosts, line, ..
+        } = &error
+        else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(known_hosts, &user);
+        assert_eq!(*line, 2);
+    }
+
+    #[tokio::test]
+    async fn a_revocation_in_any_file_wins() {
+        let lab = temp_known_hosts("revoked-lab", &format!("switch01 {KEY_A}\n"));
+        let global = temp_known_hosts("revoked-global", &format!("@revoked * {KEY_A}\n"));
+        let policy = HostKeyPolicy::Strict(KnownHosts::new(&lab).also(&global));
+        let error = check(&policy, &Node::new("switch01", 22), &key(KEY_A))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, Error::HostKeyRevoked { known_hosts, .. } if known_hosts == &global),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_new_records_in_the_first_file_only() {
+        let lab = temp_known_hosts("record-lab", "");
+        let user = temp_known_hosts("record-user", &format!("router01 {KEY_B}\n"));
+        let policy = HostKeyPolicy::AcceptNew(KnownHosts::new(&lab).also(&user));
+        check(&policy, &Node::new("switch01", 22), &key(KEY_A))
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(&lab).unwrap(),
+            format!("switch01 {KEY_A}\n")
+        );
+        assert_eq!(
+            fs::read_to_string(&user).unwrap(),
+            format!("router01 {KEY_B}\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_names_every_file_checked() {
+        let lab = temp_known_hosts("unknown-lab", "");
+        let missing = lab.with_file_name("not-there");
+        let policy = HostKeyPolicy::Strict(KnownHosts::new(&lab).also(&missing));
+        let error = check(&policy, &Node::new("switch01", 22), &key(KEY_A))
+            .await
+            .unwrap_err();
+        let Error::HostKeyUnknown { known_hosts, .. } = &error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(known_hosts, &vec![lab.clone(), missing.clone()]);
+        assert!(error.to_string().contains("not-there"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn recorded_key_types_come_from_every_file() {
+        let lab = temp_known_hosts("types-lab", "");
+        let user = temp_known_hosts("types-user", &format!("switch01 {KEY_RSA}\n"));
+        let default = [Algorithm::Ed25519, rsa(Some(HashAlg::Sha512))];
+        let policy = HostKeyPolicy::Strict(KnownHosts::new(&lab).also(&user));
+        let preferred = preferred_algorithms(&policy, &Node::new("switch01", 22), &default)
+            .await
+            .unwrap();
+        assert_eq!(
+            preferred,
+            vec![rsa(Some(HashAlg::Sha512)), Algorithm::Ed25519]
+        );
+    }
+
+    #[test]
+    fn single_files_are_the_common_case() {
+        let path = PathBuf::from("/home/me/.ssh/known_hosts");
+        assert_eq!(
+            HostKeyPolicy::strict(&path),
+            HostKeyPolicy::Strict(KnownHosts::new(&path))
+        );
+        assert_eq!(
+            HostKeyPolicy::accept_new(&path),
+            HostKeyPolicy::AcceptNew(KnownHosts::new(&path))
+        );
+        let files: Vec<_> = KnownHosts::new("/a")
+            .also("/b")
+            .files()
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(files, [PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert_eq!(
+            KnownHosts::new("/a").also("/b").record_file(),
+            Path::new("/a")
+        );
     }
 
     #[tokio::test]

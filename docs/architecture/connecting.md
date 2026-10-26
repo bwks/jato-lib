@@ -80,6 +80,13 @@ hashes count as the RSA key type. `Insecure` keeps `russh`'s default order.
 `AcceptNew` appends a plain `host key` line for an unknown server, creating the file and
 directory if needed. `Strict` never writes.
 
+A policy checks a `KnownHosts` list of files, as OpenSSH checks `UserKnownHostsFile` and
+`GlobalKnownHostsFile`: the key is known if any file records it, a revocation in any file
+refuses it, otherwise a file recording other keys for the server makes it changed (the
+error names that file and line), and `AcceptNew` records into the first file. Missing files
+count as empty. `HostKeyPolicy::strict(file)` and `accept_new(file)` are the one-file case.
+The recorded key types offered first in the handshake are gathered from all the files.
+
 ```mermaid
 flowchart TD
     key[Key offered by the server] --> revoked{"@revoked line<br/>for this key?"}

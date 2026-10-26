@@ -12,6 +12,7 @@ its document here, or add one and list it below.
 | [exec.md](exec.md) | Running commands over an exec channel |
 | [scp.md](scp.md) | Copying files with SCP |
 | [sftp.md](sftp.md) | File transfer with Jato's own SFTP client, and safe uploads |
+| [ssh_config.md](ssh_config.md) | Reading OpenSSH client configuration into hops and routes |
 | [shell.md](shell.md) | Interactive shells on a PTY, prompt matching and discovery |
 | [device.md](device.md) | Device CLIs: profiles, modes, enable, configuration |
 | [errors.md](errors.md) | The error type and what errors may and may not contain |
@@ -26,7 +27,8 @@ of them: run a command on a Linux host with `Session::run`, or drive a router's 
 
 ```text
  ┌──────────────────────────────────────────────────────────────────────┐
- │ Caller                                                               │
+ │ Caller           (optionally: ssh_config/ turns ~/.ssh/config into   │
+ │                   hops and routes for Session)                       │
  └──────┬───────────────────────────┬──────────────────────┬────────────┘
         │                           │                      │
  ┌──────▼───────────────────┐       │                      │
@@ -65,6 +67,7 @@ src/
   lib.rs              re-exports the public API
   shared/             used across the library
     error.rs          Error
+    glob.rs           host patterns: *, ?, ! negation
     node.rs           Node
     secret.rs         Secret
     time.rs           within(): the time limit helper
@@ -83,6 +86,12 @@ src/
     packet.rs         requests and replies, encoded and decoded
     attrs.rs          Metadata
     client.rs         Sftp: uploads, downloads, directories, renames
+  ssh_config/         OpenSSH client configuration
+    lexer.rs          a line into keyword and values
+    file.rs           files and Include into directives
+    resolve.rs        HostConfig under OpenSSH's rules; ProxyJump
+    hop.rs            HostConfig into Node, Auth, HostKeyPolicy, Hop
+    config.rs         SshConfig, Route
   device/             device CLIs over a shell
     cli.rs            Device, DeviceOptions
     profile.rs        DeviceProfile, ConfigMode, Mode; prompts from a discovered prompt
@@ -95,6 +104,7 @@ src/
 | `shared::secret` | `Secret` | A password, key or passphrase, wiped on drop, redacted in `Debug` |
 | `shared::error` | `Error` | The one error type, grown per module, `#[non_exhaustive]` |
 | `shared::time` | (none) | Running an operation within a time limit, as `Error::Timeout` |
+| `shared::glob` | (none) | Host patterns with `*`, `?` and `!`, for `known_hosts` and `ssh_config` |
 | `ssh::auth` | `Auth` | Credentials, the order they are tried, and logging in through `russh` |
 | `ssh::host_key` | `HostKeyPolicy` | `known_hosts` matching, the policies, recording new keys |
 | `ssh::algorithms` | (none) | The algorithm lists offered in the handshake, with legacy ones by opt-in |
@@ -104,6 +114,7 @@ src/
 | `ssh::shell` | `Shell`, `ShellOptions`, `Prompt` | PTY shells, prompt matching, discovery, output cleaning |
 | `scp` | (methods on `Session`) | Single-file copies through the remote `scp` program |
 | `sftp` | `Sftp`, `Metadata` | File transfer over the `sftp` subsystem; uploads through a temporary file and a rename |
+| `ssh_config` | `SshConfig`, `Route`, `HostConfig`, `JumpHost`, `StrictHostKeyChecking` | OpenSSH client configuration into hops and routes |
 | `device` | `Device`, `DeviceOptions`, `DeviceProfile`, `ConfigMode`, `Mode` | Device CLIs driven through a shell |
 
 How the modules depend on each other (an arrow means "uses"):
@@ -112,6 +123,9 @@ How the modules depend on each other (an arrow means "uses"):
 graph TD
     subgraph device_area[device]
         device[device]
+    end
+    subgraph config_area[ssh_config]
+        ssh_config[ssh_config]
     end
     subgraph scp_area[scp]
         scp[scp]
@@ -138,6 +152,9 @@ graph TD
     scp --> connect
     sftp --> channel
     sftp --> connect
+    ssh_config --> connect
+    ssh_config --> auth
+    ssh_config --> host_key
     connect --> auth
     connect --> host_key
     connect --> algorithms
@@ -147,7 +164,7 @@ graph TD
     host_key --> russh
 ```
 
-`shared` (error, node, secret, time) is used by every module and is left out of the graph.
+`shared` (error, glob, node, secret, time) is used by every module and is left out of the graph.
 `channel` holds what `exec` and `shell` share: turning `russh` channel messages into stdout,
 stderr and exit events, and waiting for the server to accept a request.
 

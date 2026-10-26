@@ -1,9 +1,12 @@
 # Disposable OpenSSH server for Jato's integration tests. Never expose it beyond localhost.
+# The host keys the package installs are removed, so each container makes its own at start
+# (`ssh-keygen -A`) and no two containers share a host key.
 FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openssh-server sudo \
     && rm -rf /var/lib/apt/lists/* \
+    && rm -f /etc/ssh/ssh_host_* \
     && mkdir -p /run/sshd \
     && useradd --create-home --shell /bin/sh jato \
     && echo 'jato:jato-test-password' | chpasswd \

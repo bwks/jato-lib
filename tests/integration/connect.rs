@@ -14,7 +14,7 @@ fn secret(value: &str) -> Secret {
 }
 
 fn strict(sshd: &Sshd) -> HostKeyPolicy {
-    HostKeyPolicy::Strict(sshd.known_hosts())
+    HostKeyPolicy::strict(sshd.known_hosts())
 }
 
 async fn connect(sshd: &Sshd, auth: Auth, host_key: HostKeyPolicy) -> Result<Session, Error> {
@@ -136,7 +136,7 @@ async fn failed_login_lists_what_was_tried() {
 #[ignore]
 async fn strict_refuses_an_unknown_server() {
     let sshd = Sshd::start();
-    let policy = HostKeyPolicy::Strict(sshd.dir.join("empty_known_hosts"));
+    let policy = HostKeyPolicy::strict(sshd.dir.join("empty_known_hosts"));
     let error = connect(&sshd, Auth::new(USER).password(secret(PASSWORD)), policy)
         .await
         .err()
@@ -148,7 +148,7 @@ async fn strict_refuses_an_unknown_server() {
 #[ignore]
 async fn the_recorded_key_type_is_negotiated() {
     let sshd = Sshd::start();
-    let policy = HostKeyPolicy::Strict(sshd.known_hosts_with(&sshd.rsa_host_key));
+    let policy = HostKeyPolicy::strict(sshd.known_hosts_with(&sshd.rsa_host_key));
     connect(&sshd, Auth::new(USER).password(secret(PASSWORD)), policy)
         .await
         .unwrap();
@@ -166,7 +166,7 @@ const LEGACY_ONLY: [&str; 4] = [
 #[ignore]
 async fn legacy_algorithms_are_refused_by_default() {
     let sshd = Sshd::start_with(&LEGACY_ONLY);
-    let policy = HostKeyPolicy::Strict(sshd.known_hosts_with(&sshd.rsa_host_key));
+    let policy = HostKeyPolicy::strict(sshd.known_hosts_with(&sshd.rsa_host_key));
     let error = connect(&sshd, Auth::new(USER).password(secret(PASSWORD)), policy)
         .await
         .err()
@@ -178,7 +178,7 @@ async fn legacy_algorithms_are_refused_by_default() {
 #[ignore]
 async fn legacy_algorithms_when_allowed() {
     let sshd = Sshd::start_with(&LEGACY_ONLY);
-    let policy = HostKeyPolicy::Strict(sshd.known_hosts_with(&sshd.rsa_host_key));
+    let policy = HostKeyPolicy::strict(sshd.known_hosts_with(&sshd.rsa_host_key));
     let auth = Auth::new(USER).password(secret(PASSWORD));
     let hop = Hop::new(node(&sshd), auth, policy).allow_legacy_algorithms();
     Session::connect(&hop, &ConnectOptions::default())
@@ -200,7 +200,7 @@ async fn accept_new_records_the_server() {
     let sshd = Sshd::start();
     let path = sshd.dir.join("new_known_hosts");
     let auth = Auth::new(USER).password(secret(PASSWORD));
-    connect(&sshd, auth, HostKeyPolicy::AcceptNew(path.clone()))
+    connect(&sshd, auth, HostKeyPolicy::accept_new(path.clone()))
         .await
         .unwrap();
     let recorded = fs::read_to_string(&path).unwrap();

@@ -15,7 +15,7 @@ fn entry_hop(sshd: &Sshd) -> Hop {
     Hop::new(
         Node::new("127.0.0.1", sshd.port),
         password(),
-        HostKeyPolicy::Strict(sshd.known_hosts()),
+        HostKeyPolicy::strict(sshd.known_hosts()),
     )
 }
 
@@ -24,7 +24,7 @@ fn inner_hop(sshd: &Sshd) -> Hop {
     Hop::new(
         Node::new(sshd.name.clone(), 22),
         password(),
-        HostKeyPolicy::Strict(sshd.known_hosts_by_name()),
+        HostKeyPolicy::strict(sshd.known_hosts_by_name()),
     )
 }
 
@@ -71,7 +71,7 @@ async fn each_hop_checks_its_own_host_key() {
     let unknown = Hop::new(
         Node::new(target.name.clone(), 22),
         password(),
-        HostKeyPolicy::Strict(target.dir.join("empty_known_hosts")),
+        HostKeyPolicy::strict(target.dir.join("empty_known_hosts")),
     );
     let error = Session::connect_via(&[entry_hop(&jump)], &unknown, &ConnectOptions::default())
         .await
@@ -92,7 +92,7 @@ async fn each_hop_logs_in_with_its_own_credentials() {
     let wrong = Hop::new(
         Node::new(target.name.clone(), 22),
         Auth::new(USER).password(Secret::new("wrong-password".into())),
-        HostKeyPolicy::Strict(target.known_hosts_by_name()),
+        HostKeyPolicy::strict(target.known_hosts_by_name()),
     );
     let error = Session::connect_via(&[entry_hop(&jump)], &wrong, &ConnectOptions::default())
         .await

@@ -11,7 +11,7 @@ async fn session(sshd: &Sshd) -> Session {
     let hop = Hop::new(
         Node::new("127.0.0.1", sshd.port),
         Auth::new(USER).password(Secret::new(PASSWORD.into())),
-        HostKeyPolicy::Strict(sshd.known_hosts()),
+        HostKeyPolicy::strict(sshd.known_hosts()),
     );
     Session::connect(&hop, &ConnectOptions::default())
         .await

@@ -174,6 +174,16 @@ pub enum Error {
         message: String,
     },
 
+    /// An OpenSSH client configuration could not be read or used. `context` is the file and
+    /// line, or the host being looked up.
+    #[error("ssh config {context}: {message}")]
+    SshConfig {
+        /// Where: a file and line, or a host.
+        context: String,
+        /// What is wrong.
+        message: String,
+    },
+
     /// The SSH protocol failed with a server.
     #[error("SSH protocol error with {node}")]
     Protocol {
@@ -184,16 +194,19 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
-    /// The server's host key is not recorded in `known_hosts`, and the policy does not allow
-    /// recording it.
-    #[error("{node}: host key {fingerprint} is not recorded in {}", known_hosts.display())]
+    /// The server's host key is not recorded in any of the `known_hosts` files checked, and
+    /// the policy does not allow recording it.
+    #[error(
+        "{node}: host key {fingerprint} is not recorded in {}",
+        known_hosts.iter().map(|file| file.display().to_string()).collect::<Vec<_>>().join(", ")
+    )]
     HostKeyUnknown {
         /// The server.
         node: Node,
         /// The key's SHA-256 fingerprint.
         fingerprint: String,
-        /// The `known_hosts` file checked.
-        known_hosts: PathBuf,
+        /// The `known_hosts` files checked.
+        known_hosts: Vec<PathBuf>,
     },
 
     /// The server is recorded in `known_hosts` with a different key. The server may have been
@@ -207,7 +220,7 @@ pub enum Error {
         node: Node,
         /// The offered key's SHA-256 fingerprint.
         fingerprint: String,
-        /// The `known_hosts` file checked.
+        /// The `known_hosts` file recording another key.
         known_hosts: PathBuf,
         /// The first line recording another key for the server.
         line: usize,
@@ -220,7 +233,7 @@ pub enum Error {
         node: Node,
         /// The key's SHA-256 fingerprint.
         fingerprint: String,
-        /// The `known_hosts` file checked.
+        /// The `known_hosts` file revoking the key.
         known_hosts: PathBuf,
         /// The line revoking the key.
         line: usize,
