@@ -16,7 +16,7 @@ mod shell;
 
 pub use auth::Auth;
 pub use connect::{ConnectOptions, Hop, Session};
-pub use device::{Device, DeviceOptions, DeviceProfile, Mode};
+pub use device::{ConfigMode, Device, DeviceOptions, DeviceProfile, Mode};
 pub use error::Error;
 pub use exec::{Event, Exec, Exit, Output};
 pub use host_key::HostKeyPolicy;

@@ -107,6 +107,25 @@ pub enum Error {
         last_line: String,
     },
 
+    /// The prompt came back, but not the echo of the command sent, so the output could not be
+    /// told apart from what came before. The device may not echo what is sent.
+    #[error("{node}: the prompt returned without the command's echo after {after:?}")]
+    EchoNotSeen {
+        /// The server.
+        node: Node,
+        /// How long Jato waited.
+        after: Duration,
+    },
+
+    /// No steady prompt appeared when Jato sent empty lines to find it.
+    #[error("{node}: could not find the prompt; the last line was {last_line:?}")]
+    PromptNotDiscovered {
+        /// The server.
+        node: Node,
+        /// The last line received.
+        last_line: String,
+    },
+
     /// The shell closed while Jato was waiting for a prompt.
     #[error("{node}: the shell closed; the last line was {last_line:?}")]
     ShellClosed {

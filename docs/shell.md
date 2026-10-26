@@ -21,12 +21,25 @@ everything up to and including it. The last line is taken as a terminal shows it
 sequences are removed, and only the text after the last carriage return counts. Only that
 line is decoded on each packet, so long outputs are not re-scanned.
 
-A line of output that looks like the prompt and arrives at the end of a packet ends the read
-early. This is inherent in prompt matching; specific prompt patterns avoid it.
+A line of output (not the echo) that looks exactly like the prompt and arrives at the end of
+a packet still ends the read early; this is inherent in prompt matching, and an exact,
+discovered prompt makes it unlikely.
+
+## Discovering the prompt
+
+When the prompt is not known, `Shell::read_until_quiet` reads until output arrives and then
+pauses for a given idle time, and `Shell::discover_prompt` sends empty lines until two in a row
+end on the same, non-empty line (at most five tries), which it returns. `Prompt::literal`
+matches that text exactly. A device's banner should be read first, so its last line is not
+taken for the prompt.
 
 ## Commands
 
-`Shell::command` sends a line, reads until the prompt and cleans the output
+`Shell::command` sends a line and reads until the prompt, but only once the line's echo has
+arrived in full. Without that, an echo split across packets can end the read early: FreeBSD's
+`sh` echoed `echo $0; id -un` as `echo $` and then the rest, and a loose `$` prompt matched the
+first piece, leaving every later read one command behind. A prompt that comes back without
+the echo is `Error::EchoNotSeen`. The output is then cleaned
 (`shell::command_output`): ANSI sequences and `\r` removed, the prompt line dropped, the first
 line dropped if it is the echoed command, and blank lines trimmed from both ends.
 

@@ -4,50 +4,85 @@ How `Device` drives a network device's CLI through a `Shell`, using a `DevicePro
 
 ## Profiles
 
-A `DeviceProfile` describes one CLI: the prompts for user, privileged and configuration
-modes, the password and confirmation prompts, the setup commands, the enable, configure and
-end commands, and the markers of an error line. Profiles are built in code for now;
-`DeviceProfile::cisco_ios()` covers Cisco IOS and IOS XE, tested on IOSv 15.9(3)M10 and
-Catalyst 8000V 17.16.1a:
+A `DeviceProfile` describes one CLI. Prompts are not assumed: the profile has a
+`prompt_pattern` that splits the prompt the device shows into a `base` (the hostname, or
+`user@host` on Junos) and a mode marker, and a template for each mode's prompt in which
+`{base}` stands for that base, inserted literally. Nothing depends on the prompt matching the
+device's hostname, and output lines that merely look like a prompt for some other host do not
+match. The profile also has the password and confirmation prompts, setup commands, the enable
+command, an optional configuration mode (`ConfigMode`: enter, end, and for Junos commit and
+discard commands), error markers, and an optional status command.
 
-| Item | Value |
-| ---- | ----- |
-| User prompt | `hostname>` |
-| Privileged prompt | `hostname#` |
-| Config prompt | `hostname(config...)#` |
-| Password prompt | `Password:` |
-| Confirmation | a line ending `[confirm]`; Enter confirms, `n` declines |
-| Setup | `terminal length 0`, `terminal width 511` |
-| Error marker | lines starting `% ` |
+| Profile | Mode prompts from a base | Setup | Confirm / decline | Errors | Tested on |
+| ------- | ------------------------ | ----- | ----------------- | ------ | --------- |
+| `cisco_ios` | `{base}>`, `{base}#`, `{base}(config...)#` | `terminal length 0`, `terminal width 511` | Enter / `n` at `[confirm]` | lines starting `% ` | IOSv 15.9(3)M10, Catalyst 8000V 17.16.1a |
+| `cisco_nxos` | as IOS, with an optional trailing space | `terminal length 0`, `terminal width 511` | `y` / `n` at `(y/n)` | `% `, `ERROR: ` | Nexus 9300v 10.5(3)F |
+| `arista_eos` | as IOS | `terminal length 0`, `terminal width 32767` | Enter / `n` at `[confirm]` | `% ` | cEOS 4.35.1F |
+| `juniper_junos` | `{base}> `, `{base}# ` (no user mode) | `set cli screen-length 0`, `screen-width 1024`, `complete-on-space off` | `yes` / `no` at `[yes,no]` | `error: `, `syntax error`, `unknown command`, `missing argument` | vJunos router 25.2R1.9 |
+| `posix_shell` | `[jato]$ `, `[jato]# ` (no config mode) | sets `PS1` | `y` / `n` at `[y/N]` | exit status from `echo $?` | Ubuntu 26.04, Alpine 3.23, FreeBSD 14.2, OpenBSD 7.8 |
 
-Hostnames are matched as 1 to 63 of `[\w.\-@/:]`.
+Junos operational mode (`user@host>`) counts as `Mode::Privileged`, as Junos has no enable
+step. `complete-on-space off` stops the Junos CLI completing words as a line is typed, which
+would change the line sent.
+
+`posix_shell` covers `sh`, `ash`, `ksh`, `bash` and `zsh`. A shell's prompt usually holds the
+working directory, so it changes with `cd`; the profile's prompt setup therefore sets a steady
+one, `[jato]$ ` or `[jato]# ` for root, and unsets bash's `PROMPT_COMMAND`. Shells do not
+mark errors in their output, so the profile's status command, `echo $?`, runs after each
+command, and a status other than 0 is an error. There is no enable step yet: `sudo -i` or
+`doas -s` starts a shell with a new prompt, which would need discovering again. csh and tcsh
+are not supported.
 
 ## Opening
 
-`Device::open` opens a shell, reads past any login banner to the first mode prompt, notes the
-mode, and runs the setup commands. Every exchange reads until any of the mode prompts and
-updates the mode from the prompt it ends on, so a command that changes mode is followed.
+`Device::open`:
+
+1. Opens a shell and reads until the output pauses for `DeviceOptions::quiet_after` (500 ms
+   by default), which takes in the login banner whatever it holds.
+2. Runs the profile's prompt setup, if it has one, and reads until the output pauses again.
+3. Discovers the prompt (`Shell::discover_prompt`): sends empty lines until two in a row end
+   on the same line.
+4. Builds each mode's prompt from the discovered one, and notes the mode. A prompt that does
+   not fit the profile is `Error::InvalidPrompt`, quoting it.
+5. Runs the setup commands.
+
+Every exchange after that sends a line, reads until any mode prompt once the line's echo has
+arrived in full (so a prompt-like piece of the echo, or a stale prompt, is not taken for the
+end of the output), and updates the mode from the prompt it ends on.
 
 ## Commands and configuration
 
 - `send_command` returns the cleaned output, or `Error::DeviceCommand` if a line of it starts
-  with an error marker. A confirmation prompt is declined (`n`) and reported as an error, so a
+  with an error marker or, on a profile with a status command, the command exits with a
+  status other than 0 (the error gives the status and the output's last line). A confirmation prompt is declined (`n`) and reported as an error, so a
   command such as `reload` never goes ahead by accident.
 - `enable` sends the enable command and the secret at the password prompt. A second password
   prompt means the secret was refused: Jato answers the prompts with empty lines until the
   device gives up, and returns an error.
-- `send_config` enters configuration mode from privileged mode, sends each line and checks its
+- `send_config` refuses on a profile with no configuration mode. Otherwise it enters
+  configuration mode from privileged mode, sends each line and checks its
   output for errors, confirming any confirmation prompt (sending the line is the request, as
-  for `no username`). It stops at the first error and always sends the end command, so the
-  device is left in privileged mode.
+  for `no username`). It stops at the first error. On a device that commits, it then commits
+  if every line was accepted, or runs the discard command (Junos `rollback 0`) if one was not,
+  so nothing half-applied is committed. It always sends the end command, so the device is
+  left in privileged mode. If the device does not enter configuration mode, the error quotes
+  the last line it showed.
 
 `Error::DeviceCommand` names the step (`command`, `enable`, `config line 3`) and the device's
 message, never the command or line, which may hold a secret (`username x secret y`).
 
 ## Testing
 
-`tests/integration/ios.rs` runs against a real IOS device given by `JATO_IOS_HOST`,
-`JATO_IOS_USER` and `JATO_IOS_KEY` (optionally through `JATO_JUMP_HOST` and
-`JATO_JUMP_USER`), such as a Sherpa `cisco_iosv` lab node. It changes the device's
-configuration and undoes it. Without `JATO_IOS_HOST` the tests return early and show as
-passed.
+`tests/integration/devices.rs` runs the same checks on each family: a show command, a long
+command with paging off, an invalid command, configuration applied and shown, a configuration
+error naming its line (and, for Junos, the uncommitted change thrown away), and clean-up. IOS
+also tests `enable` from a privilege 1 user. Devices are given by `JATO_<FAMILY>_HOST`,
+`_USER` and `_KEY` for `IOS`, `NXOS`, `EOS` and `JUNOS`, such as Sherpa lab nodes, which
+these tests were run against. The tests change each device's configuration and undo it.
+Without a device, a family's tests return early and show as passed.
+
+`tests/integration/hosts.rs` runs `run`, an SCP round trip with its mode checked, a shell, and
+a `posix_shell` device (output with prompt characters, `cd` keeping the prompt, a failing
+command's exit status, `send_config` refused) on Linux and BSD hosts given the same way
+(`UBUNTU`, `ALPINE`, `FREEBSD`, `OPENBSD`). It was run against Ubuntu 26.04, Alpine 3.23,
+FreeBSD 14.2 and OpenBSD 7.8.

@@ -105,3 +105,32 @@ async fn a_closed_shell_is_reported() {
     let error = shell.command("exit", &prompt, TIMEOUT).await.err().unwrap();
     assert!(matches!(error, Error::ShellClosed { .. }), "{error}");
 }
+
+#[tokio::test]
+#[ignore]
+async fn the_prompt_is_discovered() {
+    let sshd = Sshd::start();
+    let (_session, mut shell, _prompt) = shell(&sshd).await;
+    let found = shell
+        .discover_prompt(Duration::from_millis(300), TIMEOUT)
+        .await
+        .unwrap();
+    assert_eq!(found, "$ ");
+    let prompt = Prompt::literal(&found).unwrap();
+    assert_eq!(
+        shell.command("echo found", &prompt, TIMEOUT).await.unwrap(),
+        "found"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn prompt_characters_in_a_command_do_not_end_it_early() {
+    let sshd = Sshd::start();
+    let (_session, mut shell, prompt) = shell(&sshd).await;
+    let output = shell
+        .command("echo 'a $ b'; echo end", &prompt, TIMEOUT)
+        .await
+        .unwrap();
+    assert_eq!(output, "a $ b\nend");
+}

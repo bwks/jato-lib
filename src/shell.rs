@@ -21,6 +21,8 @@ const DEFAULT_ROWS: u32 = 24;
 const ESCAPE: char = '\u{1b}';
 /// The bell character, which ends operating system commands.
 const BELL: char = '\u{7}';
+/// The most empty lines sent while discovering a prompt.
+const MAX_DISCOVERY_ATTEMPTS: usize = 5;
 
 /// The terminal to request for a shell.
 #[derive(Clone, Debug)]
@@ -92,6 +94,16 @@ impl Prompt {
             .map(|prompt| format!("(?:{})", prompt.source))
             .collect();
         Self::new(&alternatives.join("|"))
+    }
+
+    /// A prompt matching exactly `text`, such as a prompt found by
+    /// [`Shell::discover_prompt`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidPrompt`] if the text is too long to compile.
+    pub fn literal(text: &str) -> Result<Self, Error> {
+        Self::new(&regex::escape(text))
     }
 
     /// Whether `line` is this prompt.
@@ -176,7 +188,9 @@ impl Shell {
     /// and including it, as received.
     ///
     /// A line in the output that happens to look like the prompt, and arrives at the end of
-    /// a packet, ends the read early; choose a prompt pattern specific enough to avoid it.
+    /// a packet, ends the read early. [`Shell::command`] avoids this by waiting for the
+    /// command's echo first; a specific prompt, such as one from
+    /// [`Shell::discover_prompt`], avoids it too.
     ///
     /// # Errors
     ///
@@ -188,9 +202,32 @@ impl Shell {
         prompt: &Prompt,
         timeout: Duration,
     ) -> Result<String, Error> {
+        self.read_to_prompt(prompt, None, timeout).await
+    }
+
+    /// Read until `prompt`, as [`Shell::read_until`] does, but only once the echo of
+    /// `command` has arrived in full, so a prompt-like piece of the echo, or a prompt left
+    /// from before, is not taken for the end of the output.
+    pub(crate) async fn read_after_echo(
+        &mut self,
+        prompt: &Prompt,
+        command: &str,
+        timeout: Duration,
+    ) -> Result<String, Error> {
+        self.read_to_prompt(prompt, Some(command), timeout).await
+    }
+
+    /// Read until `prompt`, after the echo of `echo` if one is given.
+    async fn read_to_prompt(
+        &mut self,
+        prompt: &Prompt,
+        echo: Option<&str>,
+        timeout: Duration,
+    ) -> Result<String, Error> {
         let deadline = Instant::now() + timeout;
         loop {
-            if prompt.matches(&self.last_line()) {
+            let at_prompt = prompt.matches(&self.last_line());
+            if at_prompt && echo.is_none_or(|command| self.echoed(command)) {
                 let received = std::mem::take(&mut self.received);
                 return Ok(String::from_utf8_lossy(&received).into_owned());
             }
@@ -201,10 +238,11 @@ impl Shell {
                 Ok(Some(Event::Exit(exit))) => {
                     tracing::debug!(?exit, "shell exited");
                 }
-                Ok(None) => {
-                    return Err(Error::ShellClosed {
+                Ok(None) => return Err(self.closed()),
+                Err(_) if at_prompt => {
+                    return Err(Error::EchoNotSeen {
                         node: self.node.clone(),
-                        last_line: self.last_line(),
+                        after: timeout,
                     });
                 }
                 Err(_) => {
@@ -218,12 +256,89 @@ impl Shell {
         }
     }
 
-    /// Run `command`: send it, read until `prompt`, and return the output without the echoed
-    /// command, the prompt, `\r` or ANSI sequences, and without blank lines at either end.
+    /// Read until output arrives and then stops for `idle`, and return it. For reading when
+    /// the prompt is not known yet, such as past a login banner.
     ///
     /// # Errors
     ///
-    /// As for [`Shell::send_line`] and [`Shell::read_until`].
+    /// [`Error::PromptNotFound`] if nothing arrives, or output never pauses, within
+    /// `timeout`, and [`Error::ShellClosed`] if the shell closes first.
+    #[tracing::instrument(skip_all, fields(node = %self.node), level = "debug")]
+    pub async fn read_until_quiet(
+        &mut self,
+        idle: Duration,
+        timeout: Duration,
+    ) -> Result<String, Error> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let waiting_for_first = self.received.is_empty();
+            let until = if waiting_for_first {
+                deadline
+            } else {
+                (Instant::now() + idle).min(deadline)
+            };
+            match time::timeout_at(until, self.events.next()).await {
+                Ok(Some(Event::Stdout(data) | Event::Stderr(data))) => {
+                    self.received.extend(data);
+                }
+                Ok(Some(Event::Exit(exit))) => {
+                    tracing::debug!(?exit, "shell exited");
+                }
+                Ok(None) => return Err(self.closed()),
+                Err(_) if waiting_for_first || Instant::now() >= deadline => {
+                    return Err(Error::PromptNotFound {
+                        node: self.node.clone(),
+                        after: timeout,
+                        last_line: self.last_line(),
+                    });
+                }
+                Err(_) => {
+                    let received = std::mem::take(&mut self.received);
+                    return Ok(String::from_utf8_lossy(&received).into_owned());
+                }
+            }
+        }
+    }
+
+    /// Find the prompt as the device shows it: send empty lines until two in a row end on the
+    /// same, non-empty line, waiting each time for the output to pause for `idle`. Anything
+    /// still to be read, such as a login banner, should be read first.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PromptNotDiscovered`] if no steady prompt appears, and as for
+    /// [`Shell::read_until_quiet`].
+    #[tracing::instrument(skip_all, fields(node = %self.node), level = "debug")]
+    pub async fn discover_prompt(
+        &mut self,
+        idle: Duration,
+        timeout: Duration,
+    ) -> Result<String, Error> {
+        let mut previous: Option<String> = None;
+        for _ in 0..MAX_DISCOVERY_ATTEMPTS {
+            self.send_line("").await?;
+            let received = self.read_until_quiet(idle, timeout).await?;
+            let line = last_line(&received);
+            if !line.trim().is_empty() && previous.as_deref() == Some(line.as_str()) {
+                tracing::debug!(prompt = %line, "discovered prompt");
+                return Ok(line);
+            }
+            previous = Some(line);
+        }
+        Err(Error::PromptNotDiscovered {
+            node: self.node.clone(),
+            last_line: previous.unwrap_or_default(),
+        })
+    }
+
+    /// Run `command`: send it, read until `prompt` once its echo has arrived, and return the
+    /// output without the echoed command, the prompt, `\r` or ANSI sequences, and without
+    /// blank lines at either end. The device must echo what is sent, as interactive CLIs do.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EchoNotSeen`] if the prompt came back without the echo, and as for
+    /// [`Shell::send_line`] and [`Shell::read_until`].
     pub async fn command(
         &mut self,
         command: &str,
@@ -231,8 +346,21 @@ impl Shell {
         timeout: Duration,
     ) -> Result<String, Error> {
         self.send_line(command).await?;
-        let received = self.read_until(prompt, timeout).await?;
+        let received = self.read_after_echo(prompt, command, timeout).await?;
         Ok(command_output(&received, command))
+    }
+
+    /// Whether the echo of `command` is in what has been received.
+    fn echoed(&self, command: &str) -> bool {
+        echo_complete(&String::from_utf8_lossy(&self.received), command)
+    }
+
+    /// The error for a shell that has closed.
+    fn closed(&self) -> Error {
+        Error::ShellClosed {
+            node: self.node.clone(),
+            last_line: self.last_line(),
+        }
     }
 
     /// The last line received so far, as a terminal shows it.
@@ -244,6 +372,12 @@ impl Shell {
             .map_or(0, |newline| newline + 1);
         last_line(&String::from_utf8_lossy(&self.received[start..]))
     }
+}
+
+/// Whether the echo of `command` has arrived in full in `received`.
+fn echo_complete(received: &str, command: &str) -> bool {
+    let command = command.trim();
+    command.is_empty() || strip_ansi(received).replace('\r', "").contains(command)
 }
 
 /// `text` without ANSI escape sequences: control sequences (`ESC [ ... final`), operating
@@ -366,6 +500,30 @@ mod tests {
             "line 1\nline 2"
         );
         assert_eq!(command_output("true\r\n$ ", "true"), "");
+    }
+
+    #[test]
+    fn literal_prompts_match_exactly() {
+        let prompt = Prompt::literal("sherpa@junos01> ").unwrap();
+        assert!(prompt.matches("sherpa@junos01> "));
+        assert!(!prompt.matches("sherpa@junos01>"));
+        let prompt = Prompt::literal("[jato]$ ").unwrap();
+        assert!(prompt.matches("[jato]$ "));
+        assert!(!prompt.matches("j$ "));
+    }
+
+    #[test]
+    fn an_echo_split_across_packets_is_not_complete() {
+        assert!(!echo_complete("echo $", "echo $0; id -un"));
+        assert!(echo_complete(
+            "echo $0; id -un\r\n-sh\r\n",
+            "echo $0; id -un"
+        ));
+        assert!(echo_complete(
+            "\u{1b}[6necho $0; id -un\r\n",
+            "echo $0; id -un"
+        ));
+        assert!(echo_complete("anything", ""));
     }
 
     #[test]
