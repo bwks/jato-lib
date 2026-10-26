@@ -1,0 +1,223 @@
+use std::borrow::Cow;
+use std::fmt;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
+
+use russh::client::{self, Config, Handle, Handler};
+use russh::keys::PublicKeyOrCertificate;
+use russh::{Disconnect, Preferred};
+use tokio::net::TcpStream;
+use tokio::time;
+
+use crate::algorithms;
+use crate::auth::{self, Auth};
+use crate::error::Error;
+use crate::host_key::{self, HostKeyPolicy};
+use crate::node::Node;
+
+/// How long to wait for a TCP connection and the SSH handshake, by default.
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long to wait for authentication to finish, by default.
+const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// One server to connect to: where it is, how to log in, and how to check its host key.
+#[derive(Debug)]
+pub struct Hop {
+    node: Node,
+    auth: Auth,
+    host_key: HostKeyPolicy,
+    legacy_algorithms: bool,
+}
+
+/// Settings for a connection.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ConnectOptions {
+    /// The time limit for the TCP connection, the SSH handshake and the host key check.
+    pub connect_timeout: Duration,
+    /// The time limit for authentication, across every credential tried.
+    pub auth_timeout: Duration,
+}
+
+/// An authenticated SSH connection. Dropping it closes the connection; [`Session::close`]
+/// tells the server first.
+pub struct Session {
+    node: Node,
+    handle: Handle<Client>,
+}
+
+/// The `russh` handler for one connection: it checks the server's host key.
+pub(crate) struct Client {
+    node: Node,
+    host_key: HostKeyPolicy,
+}
+
+/// Why the `russh` side of a connection failed.
+#[derive(Debug)]
+pub(crate) enum ClientError {
+    /// The SSH protocol failed.
+    Ssh(russh::Error),
+    /// The server's host key was refused, or could not be checked.
+    HostKey(Error),
+}
+
+impl Hop {
+    /// Connect to `node`, logging in with `auth` and checking its host key with `host_key`.
+    pub fn new(node: Node, auth: Auth, host_key: HostKeyPolicy) -> Self {
+        Self {
+            node,
+            auth,
+            host_key,
+            legacy_algorithms: false,
+        }
+    }
+
+    /// Also offer older algorithms that some network devices still need, after the modern
+    /// ones: SHA-1 key exchange, `ssh-rsa` host keys and SHA-1 RSA login signatures, CBC
+    /// ciphers and SHA-1 MACs. A server that supports a modern algorithm still gets it.
+    ///
+    /// These algorithms are weaker; allow them only for the hops that need them.
+    pub fn allow_legacy_algorithms(mut self) -> Self {
+        self.legacy_algorithms = true;
+        self
+    }
+}
+
+impl Default for ConnectOptions {
+    fn default() -> Self {
+        Self {
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            auth_timeout: DEFAULT_AUTH_TIMEOUT,
+        }
+    }
+}
+
+impl Session {
+    /// Connect and log in to `hop`.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Connect`] if the TCP connection fails.
+    /// - [`Error::HostKeyUnknown`], [`Error::HostKeyChanged`] or [`Error::HostKeyRevoked`] if
+    ///   the host key is refused.
+    /// - [`Error::AuthFailed`] if no credential is accepted.
+    /// - [`Error::Timeout`] if connecting or authenticating takes longer than `options` allow.
+    /// - [`Error::Protocol`] if the SSH protocol fails.
+    #[tracing::instrument(skip(hop, options), fields(node = %hop.node, username = %hop.auth.username()))]
+    pub async fn connect(hop: &Hop, options: &ConnectOptions) -> Result<Self, Error> {
+        let handshake = handshake(hop);
+        let mut handle = within(options.connect_timeout, "connect", &hop.node, handshake).await?;
+        let login = auth::authenticate(&mut handle, &hop.auth, &hop.node, hop.legacy_algorithms);
+        within(options.auth_timeout, "authentication", &hop.node, login).await?;
+        tracing::debug!("connected");
+        Ok(Self {
+            node: hop.node.clone(),
+            handle,
+        })
+    }
+
+    /// The server this session is connected to.
+    pub fn node(&self) -> &Node {
+        &self.node
+    }
+
+    /// Tell the server the session is ending, and close the connection.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Protocol`] if the server could not be told; the connection is closed anyway.
+    #[tracing::instrument(skip(self), fields(node = %self.node), level = "debug")]
+    pub async fn close(self) -> Result<(), Error> {
+        self.handle
+            .disconnect(Disconnect::ByApplication, "", "en")
+            .await
+            .map_err(|error| Error::protocol(self.node.clone(), error))
+    }
+}
+
+impl fmt::Debug for Session {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Session")
+            .field("node", &self.node)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Handler for Client {
+    type Error = ClientError;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        match server_public_key {
+            PublicKeyOrCertificate::PublicKey { key, .. } => {
+                host_key::check(&self.host_key, &self.node, key)
+                    .await
+                    .map_err(ClientError::HostKey)?;
+                Ok(true)
+            }
+            PublicKeyOrCertificate::Certificate(_) => Err(ClientError::HostKey(Error::protocol(
+                self.node.clone(),
+                "the server presented a host certificate, which Jato does not accept",
+            ))),
+        }
+    }
+}
+
+impl From<russh::Error> for ClientError {
+    fn from(error: russh::Error) -> Self {
+        Self::Ssh(error)
+    }
+}
+
+/// Open the TCP connection to `hop`, run the SSH handshake and check the host key.
+async fn handshake(hop: &Hop) -> Result<Handle<Client>, Error> {
+    let algorithms = algorithms::preferred(hop.legacy_algorithms);
+    let host_keys =
+        host_key::preferred_algorithms(&hop.host_key, &hop.node, &algorithms.key).await?;
+    let config = Config {
+        preferred: Preferred {
+            key: Cow::Owned(host_keys),
+            ..algorithms
+        },
+        ..Config::default()
+    };
+    let stream = TcpStream::connect((hop.node.host(), hop.node.port()))
+        .await
+        .map_err(|source| Error::Connect {
+            node: hop.node.clone(),
+            source,
+        })?;
+    if let Err(error) = stream.set_nodelay(true) {
+        tracing::debug!(%error, "could not disable Nagle's algorithm");
+    }
+    let client = Client {
+        node: hop.node.clone(),
+        host_key: hop.host_key.clone(),
+    };
+    match client::connect_stream(Arc::new(config), stream, client).await {
+        Ok(handle) => Ok(handle),
+        Err(ClientError::HostKey(error)) => Err(error),
+        Err(ClientError::Ssh(error)) => Err(Error::protocol(hop.node.clone(), error)),
+    }
+}
+
+/// Run `operation` with `node`, failing with [`Error::Timeout`] if it takes longer than
+/// `limit`.
+async fn within<T>(
+    limit: Duration,
+    operation: &'static str,
+    node: &Node,
+    future: impl Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    match time::timeout(limit, future).await {
+        Ok(result) => result,
+        Err(_) => Err(Error::Timeout {
+            operation,
+            node: node.clone(),
+            after: limit,
+        }),
+    }
+}

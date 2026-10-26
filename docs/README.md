@@ -15,9 +15,10 @@ Phase 1, transport:
 | `error` | Jato's typed errors (done) |
 | `node` | A server's host and port, used in errors and connection settings (done) |
 | `secret` | Secret values, wiped from memory when dropped and redacted in `Debug` (done) |
-| `auth` | Credentials and the order they are tried in |
-| `host_key` | Host key policies and `known_hosts` matching |
-| `connect` | Direct connections and jump host chains, with timeouts |
+| `auth` | Credentials and the order they are tried in (done) |
+| `host_key` | Host key policies and `known_hosts` matching (done) |
+| `algorithms` | The algorithms offered in the handshake, with legacy ones by opt-in (done) |
+| `connect` | Direct connections (done) and jump host chains, with timeouts |
 | `exec` | Running commands: stdin, stdout, stderr and exit status |
 | `sftp` | File transfer, with the mode set at creation |
 
@@ -27,6 +28,8 @@ Phase 2, network device drivers:
 | ------ | ------- |
 | `shell` | Interactive shell on a PTY, with prompt detection |
 | `device` | Device profiles: prompts, paging, privilege escalation, config mode |
+
+How a connection is made, checked and authenticated: [connecting.md](connecting.md).
 
 Integration tests live in `tests/`, run against a disposable SSH server, and are marked
 `#[ignore]`.

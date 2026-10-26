@@ -1,0 +1,13 @@
+# Test server only: password and keyboard-interactive logins are on so Jato can test them.
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+UsePAM yes
+PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+PubkeyAuthentication yes
+PermitRootLogin no
+# The authorized_keys file is mounted from the host, with the host user's ownership.
+StrictModes no
+MaxAuthTries 10
+Subsystem sftp internal-sftp

@@ -1,4 +1,5 @@
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::node::Node;
@@ -33,6 +34,28 @@ pub enum Error {
         source: io::Error,
     },
 
+    /// The TCP connection to a server could not be made.
+    #[error("{node}: could not connect")]
+    Connect {
+        /// The server.
+        node: Node,
+        /// The I/O error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// No credential was accepted. `tried` lists each attempt, and why a credential could not
+    /// be used, never the secret itself.
+    #[error("{node}: authentication as {username} failed; tried {}", tried.join(", "))]
+    AuthFailed {
+        /// The server.
+        node: Node,
+        /// The user Jato tried to log in as.
+        username: String,
+        /// Each attempt made or skipped, in order.
+        tried: Vec<String>,
+    },
+
     /// The SSH protocol failed with a server.
     #[error("SSH protocol error with {node}")]
     Protocol {
@@ -41,6 +64,48 @@ pub enum Error {
         /// The underlying protocol error.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// The server's host key is not recorded in `known_hosts`, and the policy does not allow
+    /// recording it.
+    #[error("{node}: host key {fingerprint} is not recorded in {}", known_hosts.display())]
+    HostKeyUnknown {
+        /// The server.
+        node: Node,
+        /// The key's SHA-256 fingerprint.
+        fingerprint: String,
+        /// The `known_hosts` file checked.
+        known_hosts: PathBuf,
+    },
+
+    /// The server is recorded in `known_hosts` with a different key. The server may have been
+    /// rebuilt, or the connection may be intercepted.
+    #[error(
+        "{node}: host key {fingerprint} does not match the key recorded at {}:{line}",
+        known_hosts.display()
+    )]
+    HostKeyChanged {
+        /// The server.
+        node: Node,
+        /// The offered key's SHA-256 fingerprint.
+        fingerprint: String,
+        /// The `known_hosts` file checked.
+        known_hosts: PathBuf,
+        /// The first line recording another key for the server.
+        line: usize,
+    },
+
+    /// The server's host key is marked `@revoked` in `known_hosts`.
+    #[error("{node}: host key {fingerprint} is revoked at {}:{line}", known_hosts.display())]
+    HostKeyRevoked {
+        /// The server.
+        node: Node,
+        /// The key's SHA-256 fingerprint.
+        fingerprint: String,
+        /// The `known_hosts` file checked.
+        known_hosts: PathBuf,
+        /// The line revoking the key.
+        line: usize,
     },
 }
 
