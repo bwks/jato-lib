@@ -68,6 +68,13 @@ pub enum Error {
         tried: Vec<String>,
     },
 
+    /// The server refused to run a command.
+    #[error("{node}: the server refused to run the command")]
+    ExecRefused {
+        /// The server.
+        node: Node,
+    },
+
     /// The SSH protocol failed with a server.
     #[error("SSH protocol error with {node}")]
     Protocol {

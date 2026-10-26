@@ -17,6 +17,8 @@ Jato is in early development; the plan for v1 is
   and passwords (keyboard-interactive first, then plain password).
 - Host key checking per connection: `Strict` and `AcceptNew` against a `known_hosts` file
   (plain, hashed, wildcard and negated entries, `@revoked` markers), or `Insecure` by choice.
+- Running commands without a terminal: stdin, separate stdout and stderr, and the exit
+  status or signal, collected with a time limit or streamed.
 - Modern algorithms by default; older ones (SHA-1 key exchange, `ssh-rsa`, CBC ciphers,
   SHA-1 MACs) for older network devices with `Hop::allow_legacy_algorithms`.
 - Secrets are wiped from memory when dropped and never appear in `Debug` output or errors.
@@ -34,6 +36,10 @@ async fn example(home: &std::path::Path) -> Result<(), jato::Error> {
     let host_key = HostKeyPolicy::Strict(home.join(".ssh/known_hosts"));
     let hop = Hop::new(Node::new("switch01.example.net", 22), auth, host_key);
     let session = Session::connect(&hop, &ConnectOptions::default()).await?;
+    let output = session
+        .run("show version", b"", std::time::Duration::from_secs(30))
+        .await?;
+    println!("{}", String::from_utf8_lossy(&output.stdout));
     session.close().await
 }
 ```

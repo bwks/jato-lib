@@ -158,6 +158,11 @@ impl Session {
         &self.node
     }
 
+    /// The `russh` connection to the target.
+    pub(crate) fn handle(&self) -> &Handle<Client> {
+        &self.handle
+    }
+
     /// Tell the server, then each jump host from the nearest back, that the session is
     /// ending, and close the connections.
     ///
@@ -303,7 +308,7 @@ async fn disconnect(handle: &Handle<Client>, node: &Node) -> Result<(), Error> {
 
 /// Run `operation` with `node`, failing with [`Error::Timeout`] if it takes longer than
 /// `limit`.
-async fn within<T>(
+pub(crate) async fn within<T>(
     limit: Duration,
     operation: &'static str,
     node: &Node,
