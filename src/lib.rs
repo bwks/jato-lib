@@ -9,6 +9,7 @@ mod error;
 mod exec;
 mod host_key;
 mod node;
+mod scp;
 mod secret;
 
 pub use auth::Auth;

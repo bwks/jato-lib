@@ -75,6 +75,18 @@ pub enum Error {
         node: Node,
     },
 
+    /// An SCP copy failed. `message` is the remote `scp` program's own message where there is
+    /// one, such as `No such file or directory`.
+    #[error("{node}: scp of {path} failed: {message}")]
+    Scp {
+        /// The server.
+        node: Node,
+        /// The remote path being copied.
+        path: String,
+        /// What went wrong.
+        message: String,
+    },
+
     /// The SSH protocol failed with a server.
     #[error("SSH protocol error with {node}")]
     Protocol {

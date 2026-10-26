@@ -19,6 +19,7 @@ Jato is in early development; the plan for v1 is
   (plain, hashed, wildcard and negated entries, `@revoked` markers), or `Insecure` by choice.
 - Running commands without a terminal: stdin, separate stdout and stderr, and the exit
   status or signal, collected with a time limit or streamed.
+- Copying single files with SCP, through the server's `scp` program.
 - Modern algorithms by default; older ones (SHA-1 key exchange, `ssh-rsa`, CBC ciphers,
   SHA-1 MACs) for older network devices with `Hop::allow_legacy_algorithms`.
 - Secrets are wiped from memory when dropped and never appear in `Debug` output or errors.

@@ -20,7 +20,8 @@ Phase 1, transport:
 | `algorithms` | The algorithms offered in the handshake, with legacy ones by opt-in (done) |
 | `connect` | Direct connections and jump host chains, with timeouts (done) |
 | `exec` | Running commands: stdin, stdout, stderr and exit status (done) |
-| `sftp` | File transfer, with the mode set at creation |
+| `scp` | Single-file copies through the remote `scp` program (done) |
+| `sftp` | File transfer, with the mode set at creation (later; Jato's own client) |
 
 Phase 2, network device drivers:
 
@@ -31,6 +32,7 @@ Phase 2, network device drivers:
 
 How a connection is made, checked and authenticated: [connecting.md](connecting.md).
 How commands run: [exec.md](exec.md).
+How files are copied with SCP: [scp.md](scp.md).
 
 Integration tests live in `tests/integration/`, run against disposable SSH servers in Docker
 (image in `tests/sshd/`), and are marked `#[ignore]`.

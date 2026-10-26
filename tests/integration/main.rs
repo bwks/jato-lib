@@ -5,4 +5,5 @@
 mod connect;
 mod exec;
 mod jump;
+mod scp;
 mod support;
