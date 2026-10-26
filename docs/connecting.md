@@ -1,10 +1,15 @@
 # Connecting
 
-How `Session::connect` reaches a server, checks it is the right one, and logs in.
+How `Session::connect` and `Session::connect_via` reach a server, check it is the right one,
+and log in.
 
 ## Steps
 
-1. TCP connection to the hop's `Node`, then the SSH handshake (`russh::client::connect_stream`).
+For each hop, in order:
+
+1. Reach the hop's `Node`: over TCP for the first hop, or through a `direct-tcpip` channel
+   opened by the previous hop (see "Jump hosts"). Then the SSH handshake
+   (`russh::client::connect_stream`).
 2. During the handshake `russh` calls `Client::check_server_key`, which runs
    `host_key::check` with the hop's `HostKeyPolicy`. A refusal ends the connection with a
    `HostKey*` error. Host certificates are refused: `russh` does not ask for them unless
@@ -13,6 +18,21 @@ How `Session::connect` reaches a server, checks it is the right one, and logs in
 
 Steps 1 and 2 share `ConnectOptions::connect_timeout`; step 3 has
 `ConnectOptions::auth_timeout`. Either one running out gives `Error::Timeout`.
+
+## Jump hosts
+
+`Session::connect_via(jumps, target, options)` works like OpenSSH's `ProxyJump`. The first
+jump host is reached over TCP. Each hop after it is reached through a `direct-tcpip` channel
+opened by the hop before it, so its name is resolved by that jump host, not locally. The
+channel reports `127.0.0.1` port 0 as the originator.
+
+Every hop has its own `Auth`, `HostKeyPolicy` and legacy setting. The time limits apply to
+each hop separately. Errors name the hop that failed; `Error::Tunnel` names both the jump
+host and the hop it could not reach.
+
+The `Session` keeps each jump host's connection open behind the target's. Dropping it
+closes them all; `Session::close` disconnects the target first, then the jump hosts from
+the nearest back. If a hop fails while connecting, the jump hosts already open are closed.
 
 ## Host keys
 

@@ -1,14 +1,9 @@
 //! Connecting and authenticating against a disposable OpenSSH server.
-//!
-//! Needs Docker, `ssh-keygen` and `ssh-agent`, and the test image:
-//! `docker build -t jato-test-sshd tests/sshd`. Run with `cargo test -- --ignored`.
-mod support;
-
 use std::fs;
 use std::time::Duration;
 
+use crate::support::sshd::{PASSPHRASE, PASSWORD, Sshd, USER};
 use jato::{Auth, ConnectOptions, Error, Hop, HostKeyPolicy, Node, Secret, Session};
-use support::sshd::{PASSPHRASE, PASSWORD, Sshd, USER};
 
 fn node(sshd: &Sshd) -> Node {
     Node::new("127.0.0.1", sshd.port)

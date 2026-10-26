@@ -10,7 +10,8 @@ Jato is in early development; the plan for v1 is
 
 ## Supported so far
 
-- Direct connections, with time limits for connecting and for authentication.
+- Direct connections, and connections through a chain of jump hosts (like `ProxyJump`),
+  with time limits for connecting and for authentication.
 - Authentication, tried in the order you add credentials: ssh-agent, key files (encrypted
   ones with a passphrase), the default identities in `~/.ssh`, private keys held in memory,
   and passwords (keyboard-interactive first, then plain password).

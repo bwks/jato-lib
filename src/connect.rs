@@ -7,6 +7,7 @@ use std::time::Duration;
 use russh::client::{self, Config, Handle, Handler};
 use russh::keys::PublicKeyOrCertificate;
 use russh::{Disconnect, Preferred};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::time;
 
@@ -20,6 +21,10 @@ use crate::node::Node;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long to wait for authentication to finish, by default.
 const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_secs(30);
+/// The originator a tunnel through a jump host reports, as OpenSSH's `ProxyJump` does.
+const TUNNEL_ORIGINATOR_ADDRESS: &str = "127.0.0.1";
+/// The originator port a tunnel through a jump host reports.
+const TUNNEL_ORIGINATOR_PORT: u32 = 0;
 
 /// One server to connect to: where it is, how to log in, and how to check its host key.
 #[derive(Debug)]
@@ -40,9 +45,16 @@ pub struct ConnectOptions {
     pub auth_timeout: Duration,
 }
 
-/// An authenticated SSH connection. Dropping it closes the connection; [`Session::close`]
-/// tells the server first.
+/// An authenticated SSH connection, possibly through jump hosts. Dropping it closes the
+/// connection and every jump host connection; [`Session::close`] tells the servers first.
 pub struct Session {
+    node: Node,
+    handle: Handle<Client>,
+    jumps: Vec<Jump>,
+}
+
+/// A connection to a jump host, kept open while the hops behind it are in use.
+struct Jump {
     node: Node,
     handle: Handle<Client>,
 }
@@ -104,16 +116,40 @@ impl Session {
     /// - [`Error::AuthFailed`] if no credential is accepted.
     /// - [`Error::Timeout`] if connecting or authenticating takes longer than `options` allow.
     /// - [`Error::Protocol`] if the SSH protocol fails.
-    #[tracing::instrument(skip(hop, options), fields(node = %hop.node, username = %hop.auth.username()))]
     pub async fn connect(hop: &Hop, options: &ConnectOptions) -> Result<Self, Error> {
-        let handshake = handshake(hop);
-        let mut handle = within(options.connect_timeout, "connect", &hop.node, handshake).await?;
-        let login = auth::authenticate(&mut handle, &hop.auth, &hop.node, hop.legacy_algorithms);
-        within(options.auth_timeout, "authentication", &hop.node, login).await?;
+        Self::connect_via(&[], hop, options).await
+    }
+
+    /// Connect and log in to `target` through `jumps`, in order, as OpenSSH's `ProxyJump`
+    /// does. The first jump host is reached directly, and each one opens a tunnel to the
+    /// next hop, so later hops' names are resolved by the jump host before them. Every hop
+    /// is checked and logged in to with its own settings, and the time limits in `options`
+    /// apply to each hop.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Session::connect`], naming the hop that failed, and [`Error::Tunnel`] if a
+    /// jump host cannot reach the next hop.
+    #[tracing::instrument(skip_all, fields(node = %target.node, username = %target.auth.username(), jumps = jumps.len()))]
+    pub async fn connect_via(
+        jumps: &[Hop],
+        target: &Hop,
+        options: &ConnectOptions,
+    ) -> Result<Self, Error> {
+        let mut opened: Vec<Jump> = Vec::with_capacity(jumps.len());
+        for hop in jumps {
+            let handle = open_hop(opened.last(), hop, options).await?;
+            opened.push(Jump {
+                node: hop.node.clone(),
+                handle,
+            });
+        }
+        let handle = open_hop(opened.last(), target, options).await?;
         tracing::debug!("connected");
         Ok(Self {
-            node: hop.node.clone(),
+            node: target.node.clone(),
             handle,
+            jumps: opened,
         })
     }
 
@@ -122,24 +158,32 @@ impl Session {
         &self.node
     }
 
-    /// Tell the server the session is ending, and close the connection.
+    /// Tell the server, then each jump host from the nearest back, that the session is
+    /// ending, and close the connections.
     ///
     /// # Errors
     ///
-    /// [`Error::Protocol`] if the server could not be told; the connection is closed anyway.
+    /// [`Error::Protocol`] for the first server that could not be told; every connection is
+    /// closed anyway.
     #[tracing::instrument(skip(self), fields(node = %self.node), level = "debug")]
     pub async fn close(self) -> Result<(), Error> {
-        self.handle
-            .disconnect(Disconnect::ByApplication, "", "en")
-            .await
-            .map_err(|error| Error::protocol(self.node.clone(), error))
+        let mut result = disconnect(&self.handle, &self.node).await;
+        for jump in self.jumps.iter().rev() {
+            let closed = disconnect(&jump.handle, &jump.node).await;
+            if result.is_ok() {
+                result = closed;
+            }
+        }
+        result
     }
 }
 
 impl fmt::Debug for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let jumps: Vec<&Node> = self.jumps.iter().map(|jump| &jump.node).collect();
         f.debug_struct("Session")
             .field("node", &self.node)
+            .field("jumps", &jumps)
             .finish_non_exhaustive()
     }
 }
@@ -172,8 +216,23 @@ impl From<russh::Error> for ClientError {
     }
 }
 
-/// Open the TCP connection to `hop`, run the SSH handshake and check the host key.
-async fn handshake(hop: &Hop) -> Result<Handle<Client>, Error> {
+/// Connect and log in to `hop`, directly or through the jump host `via`.
+async fn open_hop(
+    via: Option<&Jump>,
+    hop: &Hop,
+    options: &ConnectOptions,
+) -> Result<Handle<Client>, Error> {
+    let handshake = handshake(via, hop);
+    let mut handle = within(options.connect_timeout, "connect", &hop.node, handshake).await?;
+    let login = auth::authenticate(&mut handle, &hop.auth, &hop.node, hop.legacy_algorithms);
+    within(options.auth_timeout, "authentication", &hop.node, login).await?;
+    tracing::debug!(node = %hop.node, "logged in");
+    Ok(handle)
+}
+
+/// Reach `hop`, over TCP or through a tunnel from the jump host `via`, run the SSH handshake
+/// and check the host key.
+async fn handshake(via: Option<&Jump>, hop: &Hop) -> Result<Handle<Client>, Error> {
     let algorithms = algorithms::preferred(hop.legacy_algorithms);
     let host_keys =
         host_key::preferred_algorithms(&hop.host_key, &hop.node, &algorithms.key).await?;
@@ -184,24 +243,62 @@ async fn handshake(hop: &Hop) -> Result<Handle<Client>, Error> {
         },
         ..Config::default()
     };
-    let stream = TcpStream::connect((hop.node.host(), hop.node.port()))
-        .await
-        .map_err(|source| Error::Connect {
-            node: hop.node.clone(),
-            source,
-        })?;
-    if let Err(error) = stream.set_nodelay(true) {
-        tracing::debug!(%error, "could not disable Nagle's algorithm");
-    }
     let client = Client {
         node: hop.node.clone(),
         host_key: hop.host_key.clone(),
     };
+    match via {
+        None => {
+            let stream = TcpStream::connect((hop.node.host(), hop.node.port()))
+                .await
+                .map_err(|source| Error::Connect {
+                    node: hop.node.clone(),
+                    source,
+                })?;
+            if let Err(error) = stream.set_nodelay(true) {
+                tracing::debug!(%error, "could not disable Nagle's algorithm");
+            }
+            start_ssh(config, stream, client).await
+        }
+        Some(jump) => {
+            let channel = jump
+                .handle
+                .channel_open_direct_tcpip(
+                    hop.node.host(),
+                    u32::from(hop.node.port()),
+                    TUNNEL_ORIGINATOR_ADDRESS,
+                    TUNNEL_ORIGINATOR_PORT,
+                )
+                .await
+                .map_err(|error| Error::Tunnel {
+                    via: jump.node.clone(),
+                    node: hop.node.clone(),
+                    source: Box::new(error),
+                })?;
+            start_ssh(config, channel.into_stream(), client).await
+        }
+    }
+}
+
+/// Run the SSH handshake over `stream`, with `client` checking the host key.
+async fn start_ssh<S>(config: Config, stream: S, client: Client) -> Result<Handle<Client>, Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let node = client.node.clone();
     match client::connect_stream(Arc::new(config), stream, client).await {
         Ok(handle) => Ok(handle),
         Err(ClientError::HostKey(error)) => Err(error),
-        Err(ClientError::Ssh(error)) => Err(Error::protocol(hop.node.clone(), error)),
+        Err(ClientError::Ssh(error)) => Err(Error::protocol(node, error)),
     }
+}
+
+/// Tell the server at `node` the session is ending.
+async fn disconnect(handle: &Handle<Client>, node: &Node) -> Result<(), Error> {
+    handle
+        .disconnect(Disconnect::ByApplication, "", "en")
+        .await
+        .map_err(|error| Error::protocol(node.clone(), error))
 }
 
 /// Run `operation` with `node`, failing with [`Error::Timeout`] if it takes longer than

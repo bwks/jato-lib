@@ -44,6 +44,18 @@ pub enum Error {
         source: io::Error,
     },
 
+    /// A jump host could not open a connection to the next hop.
+    #[error("{via}: could not open a tunnel to {node}")]
+    Tunnel {
+        /// The jump host asked to open the tunnel.
+        via: Node,
+        /// The hop it could not reach.
+        node: Node,
+        /// Why the jump host refused or failed.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     /// No credential was accepted. `tried` lists each attempt, and why a credential could not
     /// be used, never the secret itself.
     #[error("{node}: authentication as {username} failed; tried {}", tried.join(", "))]

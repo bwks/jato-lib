@@ -18,7 +18,7 @@ Phase 1, transport:
 | `auth` | Credentials and the order they are tried in (done) |
 | `host_key` | Host key policies and `known_hosts` matching (done) |
 | `algorithms` | The algorithms offered in the handshake, with legacy ones by opt-in (done) |
-| `connect` | Direct connections (done) and jump host chains, with timeouts |
+| `connect` | Direct connections and jump host chains, with timeouts (done) |
 | `exec` | Running commands: stdin, stdout, stderr and exit status |
 | `sftp` | File transfer, with the mode set at creation |
 
@@ -31,5 +31,5 @@ Phase 2, network device drivers:
 
 How a connection is made, checked and authenticated: [connecting.md](connecting.md).
 
-Integration tests live in `tests/`, run against a disposable SSH server, and are marked
-`#[ignore]`.
+Integration tests live in `tests/integration/`, run against disposable SSH servers in Docker
+(image in `tests/sshd/`), and are marked `#[ignore]`.

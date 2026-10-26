@@ -17,12 +17,20 @@ static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 /// A running test server. The container and its files are removed on drop.
 pub struct Sshd {
     container: String,
+    /// The container's name, which resolves on its Docker network.
+    pub name: String,
     pub port: u16,
     pub dir: PathBuf,
     /// The server's ed25519 host key, as an OpenSSH public key line.
     pub host_key: String,
     /// The server's RSA host key, as an OpenSSH public key line.
     pub rsa_host_key: String,
+}
+
+/// A private Docker network, removed on drop. Declare it before the servers on it, so it is
+/// dropped after them.
+pub struct Network {
+    pub name: String,
 }
 
 /// An ssh-agent holding the unencrypted test key. It is stopped on drop.
@@ -39,8 +47,18 @@ impl Sshd {
 
     /// Start a server, passing `options` to sshd as `-o` settings.
     pub fn start_with(options: &[&str]) -> Self {
-        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("jato-it-{}-{id}", std::process::id()));
+        Self::launch(None, options)
+    }
+
+    /// Start a server with the default test configuration on `network`, where other servers
+    /// reach it by [`Sshd::name`].
+    pub fn start_in(network: &Network) -> Self {
+        Self::launch(Some(network), &[])
+    }
+
+    fn launch(network: Option<&Network>, options: &[&str]) -> Self {
+        let name = unique_name();
+        let dir = std::env::temp_dir().join(&name);
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         keygen(&dir.join("id_plain"), "ed25519", "");
@@ -62,19 +80,22 @@ impl Sshd {
             "{}:/home/{USER}/.ssh/authorized_keys:ro",
             dir.join("authorized_keys").display()
         );
-        let container = docker(&[
+        let mut args = vec![
             "run",
             "-d",
             "--rm",
+            "--name",
+            &name,
             "-p",
             "127.0.0.1::22",
             "-v",
             &mount,
-            IMAGE,
-            "/bin/sh",
-            "-c",
-            &sshd,
-        ]);
+        ];
+        if let Some(network) = network {
+            args.extend(["--network", &network.name]);
+        }
+        args.extend([IMAGE, "/bin/sh", "-c", &sshd]);
+        let container = docker(&args);
         let port = docker(&["port", &container, "22/tcp"])
             .rsplit(':')
             .next()
@@ -86,6 +107,7 @@ impl Sshd {
         let rsa_host_key = read_file(&container, "/etc/ssh/ssh_host_rsa_key.pub");
         Self {
             container,
+            name,
             port,
             dir,
             host_key,
@@ -102,6 +124,13 @@ impl Sshd {
     pub fn known_hosts_with(&self, key: &str) -> PathBuf {
         let path = self.dir.join("known_hosts");
         fs::write(&path, format!("[127.0.0.1]:{} {key}\n", self.port)).unwrap();
+        path
+    }
+
+    /// A `known_hosts` file recording this server's ed25519 key under its network name.
+    pub fn known_hosts_by_name(&self) -> PathBuf {
+        let path = self.dir.join("known_hosts_by_name");
+        fs::write(&path, format!("{} {}\n", self.name, self.host_key)).unwrap();
         path
     }
 
@@ -131,6 +160,25 @@ impl Sshd {
     }
 }
 
+impl Network {
+    /// Create a private Docker network.
+    pub fn create() -> Self {
+        let name = unique_name();
+        docker(&["network", "create", &name]);
+        Self { name }
+    }
+}
+
+impl Drop for Network {
+    fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args(["network", "rm", &self.name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 impl Drop for Sshd {
     fn drop(&mut self) {
         let _ = Command::new("docker")
@@ -147,6 +195,12 @@ impl Drop for Agent {
         let _ = self.process.kill();
         let _ = self.process.wait();
     }
+}
+
+/// A name for a container, network or directory, unique to this test run.
+fn unique_name() -> String {
+    let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    format!("jato-it-{}-{id}", std::process::id())
 }
 
 fn keygen(path: &Path, key_type: &str, passphrase: &str) {
