@@ -7,7 +7,8 @@ How `Device` drives a network device's CLI through a `Shell`, using a `DevicePro
 A `DeviceProfile` describes one CLI: the prompts for user, privileged and configuration
 modes, the password and confirmation prompts, the setup commands, the enable, configure and
 end commands, and the markers of an error line. Profiles are built in code for now;
-`DeviceProfile::cisco_ios()` covers Cisco IOS and IOS XE:
+`DeviceProfile::cisco_ios()` covers Cisco IOS and IOS XE, tested on IOSv 15.9(3)M10 and
+Catalyst 8000V 17.16.1a:
 
 | Item | Value |
 | ---- | ----- |
