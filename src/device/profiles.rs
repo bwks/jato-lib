@@ -35,7 +35,7 @@ impl DeviceProfile {
             setup_commands: vec!["terminal length 0".into(), "terminal width 511".into()],
             enable_command: Some("enable".into()),
             enable_starts_shell: false,
-            disable_command: None,
+            disable_command: Some("disable".into()),
             config: Some(ConfigMode::new(
                 r"{base}\(config[^)]*\)#",
                 "configure terminal",
@@ -95,7 +95,7 @@ impl DeviceProfile {
             setup_commands: vec!["terminal length 0".into(), "terminal width 32767".into()],
             enable_command: Some("enable".into()),
             enable_starts_shell: false,
-            disable_command: None,
+            disable_command: Some("disable".into()),
             config: Some(ConfigMode::new(
                 r"{base}\(config[^)]*\)#",
                 "configure terminal",
@@ -221,6 +221,24 @@ mod tests {
             "This operation will remove all username related configurations with same name.Do you want to continue? [confirm]"
         ));
         assert!(ios.confirm_prompt.matches("Proceed with reload? [confirm]"));
+    }
+
+    #[test]
+    fn devices_with_a_user_mode_can_disable() {
+        let disable = |profile: DeviceProfile| profile.disable_command;
+        assert_eq!(
+            disable(DeviceProfile::cisco_ios().unwrap()).as_deref(),
+            Some("disable")
+        );
+        assert_eq!(
+            disable(DeviceProfile::arista_eos().unwrap()).as_deref(),
+            Some("disable")
+        );
+        assert_eq!(
+            disable(DeviceProfile::posix_shell().unwrap()).as_deref(),
+            Some("exit")
+        );
+        assert_eq!(disable(DeviceProfile::juniper_junos().unwrap()), None);
     }
 
     #[test]

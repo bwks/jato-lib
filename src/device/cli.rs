@@ -254,7 +254,9 @@ impl Device {
     }
 
     /// Leave privileged mode for user mode, such as leaving the root shell that
-    /// [`Device::enable`] started. Does nothing if the device is already in user mode.
+    /// [`Device::enable`] started. Does nothing if the device is already in user mode. On a
+    /// device with no disable command, such as Junos, whose privileges come from the login
+    /// class, it logs a warning and does nothing: the device stays privileged.
     ///
     /// On a profile whose enable starts a shell, only a shell started by `enable` is left: if
     /// the session has been privileged since login (logged in as root), leaving would end
@@ -262,9 +264,8 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// [`Error::DeviceCommand`] if the profile has no disable command, the device is in
-    /// configuration mode or stays privileged, or leaving would end the session, and as for
-    /// [`Shell::read_until`].
+    /// [`Error::DeviceCommand`] if the device is in configuration mode or stays privileged,
+    /// or leaving would end the session, and as for [`Shell::read_until`].
     #[tracing::instrument(skip_all, fields(node = %self.node))]
     pub async fn disable(&mut self) -> Result<(), Error> {
         if self.mode == Mode::User {
@@ -274,7 +275,11 @@ impl Device {
             return Err(self.failure("disable", "the device is in configuration mode"));
         }
         let Some(command) = self.profile.disable_command.clone() else {
-            return Err(self.failure("disable", "this device has no disable command"));
+            tracing::warn!(
+                profile = %self.profile.name,
+                "this device has no disable command; it stays privileged"
+            );
+            return Ok(());
         };
         if self.profile.enable_starts_shell && self.shells_started == 0 {
             return Err(self.failure(

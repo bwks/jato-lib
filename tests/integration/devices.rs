@@ -27,6 +27,10 @@ struct Family {
     remove: &'static [&'static str],
     /// Configuration whose second line is invalid, and the start of the device's error.
     invalid: (&'static [&'static str], &'static str),
+    /// Configuration that sets an enable secret (`{secret}` stands for it) and removes it,
+    /// for families with a user mode to disable to. Without one, `disable` and `enable` must
+    /// both do nothing, leaving the device privileged.
+    enable_secret: Option<(&'static str, &'static str)>,
 }
 
 const IOS: Family = Family {
@@ -48,6 +52,7 @@ const IOS: Family = Family {
         ],
         "% Invalid input",
     ),
+    enable_secret: Some(("enable secret {secret}", "no enable secret")),
 };
 
 const EOS: Family = Family {
@@ -69,6 +74,7 @@ const EOS: Family = Family {
         ],
         "% Invalid input",
     ),
+    enable_secret: Some(("enable password {secret}", "no enable password")),
 };
 
 const NXOS: Family = Family {
@@ -90,6 +96,7 @@ const NXOS: Family = Family {
         ],
         "% Invalid command",
     ),
+    enable_secret: None,
 };
 
 const JUNOS: Family = Family {
@@ -110,6 +117,7 @@ const JUNOS: Family = Family {
         ],
         "syntax error",
     ),
+    enable_secret: None,
 };
 
 async fn open(target: &Target, family: &Family, session: &Session) -> Device {
@@ -192,6 +200,66 @@ async fn configuration(family: &Family) {
         .unwrap_or_else(|error| panic!("{}: {error}", family.prefix));
 }
 
+async fn disable_and_enable(family: &Family) {
+    let Some(target) = Target::from_env(family.prefix) else {
+        return;
+    };
+    let session = target.connect().await;
+    let mut device = open(&target, family, &session).await;
+    assert_eq!(device.mode(), Mode::Privileged, "{}", family.prefix);
+    let Some((set, remove)) = family.enable_secret else {
+        device
+            .disable()
+            .await
+            .unwrap_or_else(|error| panic!("{}: {error}", family.prefix));
+        assert_eq!(device.mode(), Mode::Privileged, "{}", family.prefix);
+        device
+            .enable(&Secret::new(String::new()))
+            .await
+            .unwrap_or_else(|error| panic!("{}: {error}", family.prefix));
+        assert_eq!(device.mode(), Mode::Privileged, "{}", family.prefix);
+        return;
+    };
+    device
+        .send_config(&[&set.replace("{secret}", ENABLE_SECRET)])
+        .await
+        .unwrap_or_else(|error| panic!("{}: {error}", family.prefix));
+    device
+        .disable()
+        .await
+        .unwrap_or_else(|error| panic!("{}: {error}", family.prefix));
+    assert_eq!(device.mode(), Mode::User, "{}", family.prefix);
+    device.disable().await.unwrap();
+    assert_eq!(device.mode(), Mode::User, "{}", family.prefix);
+    device
+        .enable(&Secret::new(ENABLE_SECRET.into()))
+        .await
+        .unwrap_or_else(|error| panic!("{}: {error}", family.prefix));
+    assert_eq!(device.mode(), Mode::Privileged, "{}", family.prefix);
+    device
+        .send_config(&[remove])
+        .await
+        .unwrap_or_else(|error| panic!("{}: {error}", family.prefix));
+}
+
+#[tokio::test]
+#[ignore]
+async fn eos_disable_and_enable() {
+    disable_and_enable(&EOS).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn nxos_disable_and_enable() {
+    disable_and_enable(&NXOS).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn junos_disable_and_enable() {
+    disable_and_enable(&JUNOS).await;
+}
+
 #[tokio::test]
 #[ignore]
 async fn ios_commands_and_paging() {
@@ -242,7 +310,9 @@ async fn junos_configuration() {
 
 #[tokio::test]
 #[ignore]
-async fn ios_enable_from_a_low_privilege_login() {
+/// One test for both, as each sets and removes the same device's enable secret.
+async fn ios_disable_and_enable_from_a_low_privilege_login() {
+    disable_and_enable(&IOS).await;
     let Some(target) = Target::from_env(IOS.prefix) else {
         return;
     };

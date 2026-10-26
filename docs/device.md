@@ -15,9 +15,9 @@ discard commands), error markers, and an optional status command.
 
 | Profile | Mode prompts from a base | Setup | Confirm / decline | Errors | Tested on |
 | ------- | ------------------------ | ----- | ----------------- | ------ | --------- |
-| `cisco_ios` | `{base}>`, `{base}#`, `{base}(config...)#` | `terminal length 0`, `terminal width 511` | Enter / `n` at `[confirm]` | lines starting `% ` | IOSv 15.9(3)M10, Catalyst 8000V 17.16.1a |
+| `cisco_ios` | `{base}>`, `{base}#`, `{base}(config...)#`; `enable` / `disable` | `terminal length 0`, `terminal width 511` | Enter / `n` at `[confirm]` | lines starting `% ` | IOSv 15.9(3)M10, Catalyst 8000V 17.16.1a |
 | `cisco_nxos` | as IOS, with an optional trailing space | `terminal length 0`, `terminal width 511` | `y` / `n` at `(y/n)` | `% `, `ERROR: ` | Nexus 9300v 10.5(3)F |
-| `arista_eos` | as IOS | `terminal length 0`, `terminal width 32767` | Enter / `n` at `[confirm]` | `% ` | cEOS 4.35.1F |
+| `arista_eos` | as IOS; `enable` / `disable` | `terminal length 0`, `terminal width 32767` | Enter / `n` at `[confirm]` | `% ` | cEOS 4.35.1F |
 | `juniper_junos` | `{base}> `, `{base}# ` (no user mode) | `set cli screen-length 0`, `screen-width 1024`, `complete-on-space off` | `yes` / `no` at `[yes,no]` | `error: `, `syntax error`, `unknown command`, `missing argument` | vJunos router 25.2R1.9 |
 | `posix_shell` | `[jato]$ `, `[jato]# ` (no config mode); enable with `sudo -s` or `doas -s` | sets `PS1` | `y` / `n` at `[y/N]` | exit status from `echo $?` | Ubuntu 26.04, Alpine 3.23, FreeBSD 14.2, OpenBSD 7.8 |
 
@@ -49,7 +49,12 @@ OpenBSD and Alpine). That starts a new shell with a prompt of its own, so the pr
 `disable` leaves privileged mode with the profile's disable command, `exit` for
 `posix_shell`, back to the user's shell and its `[jato]$ ` prompt. It does nothing in user
 mode. It only leaves shells that `enable` started: if the session has been root since login,
-`exit` would end it, so `disable` refuses. The network profiles have no disable command yet.
+`exit` would end it, so `disable` refuses.
+
+On network devices, `disable` sends `disable` on IOS and EOS, back to the `host>` prompt.
+NX-OS (whose CLI rejects `disable`) and Junos (whose privileges come from the login class)
+have no disable command: there `disable` logs a warning and does nothing, and the device
+stays privileged. `enable` likewise does nothing on a device that is already privileged.
 
 ## Opening
 
@@ -93,8 +98,9 @@ message, never the command or line, which may hold a secret (`username x secret 
 
 `tests/integration/devices.rs` runs the same checks on each family: a show command, a long
 command with paging off, an invalid command, configuration applied and shown, a configuration
-error naming its line (and, for Junos, the uncommitted change thrown away), and clean-up. IOS
-also tests `enable` from a privilege 1 user. Devices are given by `JATO_<FAMILY>_HOST`,
+error naming its line (and, for Junos, the uncommitted change thrown away), clean-up, and
+`disable` then `enable` with an enable secret (or, on NX-OS and Junos, both doing nothing).
+IOS also tests `enable` from a privilege 1 user. Devices are given by `JATO_<FAMILY>_HOST`,
 `_USER` and `_KEY` for `IOS`, `NXOS`, `EOS` and `JUNOS`, such as Sherpa lab nodes, which
 these tests were run against. The tests change each device's configuration and undo it.
 Without a device, a family's tests return early and show as passed.
