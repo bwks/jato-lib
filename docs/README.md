@@ -14,7 +14,7 @@ Phase 1, transport:
 | ------ | ------- |
 | `error` | Jato's typed errors (done) |
 | `node` | A server's host and port, used in errors and connection settings (done) |
-| `secret` | Secret types, wiped from memory when dropped and redacted in `Debug` |
+| `secret` | Secret values, wiped from memory when dropped and redacted in `Debug` (done) |
 | `auth` | Credentials and the order they are tried in |
 | `host_key` | Host key policies and `known_hosts` matching |
 | `connect` | Direct connections and jump host chains, with timeouts |

@@ -4,6 +4,8 @@
 
 mod error;
 mod node;
+mod secret;
 
 pub use error::Error;
 pub use node::Node;
+pub use secret::Secret;

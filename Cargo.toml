@@ -11,3 +11,4 @@ categories = ["network-programming"]
 
 [dependencies]
 thiserror = "2"
+zeroize = "1"
