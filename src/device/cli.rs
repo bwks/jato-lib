@@ -44,6 +44,8 @@ pub struct Device {
     any_or_password: Prompt,
     /// Any mode prompt, or the confirmation prompt.
     any_or_confirm: Prompt,
+    /// How many shells `enable` has started, which `disable` may leave.
+    shells_started: usize,
 }
 
 impl Default for DeviceOptions {
@@ -102,6 +104,7 @@ impl Device {
             any_prompt,
             any_or_password,
             any_or_confirm,
+            shells_started: 0,
         };
         let setup = device.profile.setup_commands.clone();
         for command in &setup {
@@ -156,6 +159,9 @@ impl Device {
         let Some(command) = self.profile.enable_command.clone() else {
             return Err(self.failure("enable", "this device has no enable command"));
         };
+        if self.profile.enable_starts_shell {
+            return self.enable_new_shell(&command, secret).await;
+        }
         self.shell.send_line(&command).await?;
         let mut received = self
             .shell
@@ -245,6 +251,107 @@ impl Device {
             Some(error) => Err(error),
             None => Ok(outputs.join("\n").trim_matches('\n').to_string()),
         }
+    }
+
+    /// Leave privileged mode for user mode, such as leaving the root shell that
+    /// [`Device::enable`] started. Does nothing if the device is already in user mode.
+    ///
+    /// On a profile whose enable starts a shell, only a shell started by `enable` is left: if
+    /// the session has been privileged since login (logged in as root), leaving would end
+    /// the session, and this is refused.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::DeviceCommand`] if the profile has no disable command, the device is in
+    /// configuration mode or stays privileged, or leaving would end the session, and as for
+    /// [`Shell::read_until`].
+    #[tracing::instrument(skip_all, fields(node = %self.node))]
+    pub async fn disable(&mut self) -> Result<(), Error> {
+        if self.mode == Mode::User {
+            return Ok(());
+        }
+        if self.mode == Mode::Config {
+            return Err(self.failure("disable", "the device is in configuration mode"));
+        }
+        let Some(command) = self.profile.disable_command.clone() else {
+            return Err(self.failure("disable", "this device has no disable command"));
+        };
+        if self.profile.enable_starts_shell && self.shells_started == 0 {
+            return Err(self.failure(
+                "disable",
+                "the session has been privileged since login, and leaving would end it",
+            ));
+        }
+        self.exchange(&command, false).await?;
+        if self.mode != Mode::User {
+            return Err(self.failure("disable", "the device did not leave privileged mode"));
+        }
+        if self.profile.enable_starts_shell {
+            self.shells_started -= 1;
+        }
+        Ok(())
+    }
+
+    /// Enter privileged mode with `command`, which starts a new shell, such as `sudo -s`:
+    /// answer its password prompt with `secret`, then set up and discover the new shell's
+    /// prompt.
+    async fn enable_new_shell(&mut self, command: &str, secret: &Secret) -> Result<(), Error> {
+        self.shell.send_line(command).await?;
+        let mut received = self.read_until_settled().await?;
+        if self.profile.password_prompt.matches(&last_line(&received)) {
+            self.shell.send_line(secret.expose()).await?;
+            received = self.read_until_settled().await?;
+            if self.profile.password_prompt.matches(&last_line(&received)) {
+                self.cancel_password_prompts().await?;
+                return Err(self.failure("enable", "the password was refused"));
+            }
+        }
+        if self.prompts.mode_of(&last_line(&received)) == Some(Mode::User) {
+            let output = command_output(&received, command);
+            let message = output
+                .lines()
+                .last()
+                .unwrap_or("the device did not enter privileged mode");
+            return Err(self.failure("enable", message));
+        }
+        self.rediscover().await?;
+        if self.mode != Mode::Privileged {
+            return Err(self.failure("enable", "the device did not enter privileged mode"));
+        }
+        self.shells_started += 1;
+        Ok(())
+    }
+
+    /// Read until the output pauses with something other than a blank line last, so a pause
+    /// after a newline, such as while `sudo` delays after a wrong password, is waited out.
+    async fn read_until_settled(&mut self) -> Result<String, Error> {
+        let (idle, timeout) = (self.options.quiet_after, self.options.command_timeout);
+        let mut received = String::new();
+        loop {
+            received.push_str(&self.shell.read_until_quiet(idle, timeout).await?);
+            if !last_line(&received).trim().is_empty() {
+                return Ok(received);
+            }
+        }
+    }
+
+    /// Run the prompt setup, discover the prompt again, and rebuild the mode prompts from it,
+    /// as after a new shell has started.
+    async fn rediscover(&mut self) -> Result<(), Error> {
+        let (idle, timeout) = (self.options.quiet_after, self.options.command_timeout);
+        if let Some(setup) = self.profile.prompt_setup.clone() {
+            self.shell.send_line(&setup).await?;
+            self.shell.read_until_quiet(idle, timeout).await?;
+        }
+        let discovered = self.shell.discover_prompt(idle, timeout).await?;
+        let prompts = ModePrompts::from_prompt(&self.profile, &discovered)?;
+        self.mode = prompts.mode_of(&discovered).unwrap_or(self.mode);
+        self.any_prompt = prompts.any()?;
+        self.any_or_password = Prompt::any_of(&[&self.any_prompt, &self.profile.password_prompt])?;
+        self.any_or_confirm = Prompt::any_of(&[&self.any_prompt, &self.profile.confirm_prompt])?;
+        self.prompts = prompts;
+        tracing::debug!(prompt = %discovered, mode = ?self.mode, "prompt discovered again");
+        Ok(())
     }
 
     /// The exit status of the last command, for profiles with a status command.

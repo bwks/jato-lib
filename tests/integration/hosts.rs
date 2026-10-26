@@ -2,7 +2,7 @@
 //! `JATO_FREEBSD_*` and `JATO_OPENBSD_*` (see `support::target`).
 use std::time::Duration;
 
-use jato::{Device, DeviceOptions, DeviceProfile, Error, Exit, Mode, Prompt, ShellOptions};
+use jato::{Device, DeviceOptions, DeviceProfile, Error, Exit, Mode, Prompt, Secret, ShellOptions};
 
 use crate::support::target::Target;
 
@@ -101,7 +101,8 @@ async fn posix_shell_devices_run_commands() {
             continue;
         };
         let session = target.connect().await;
-        let profile = DeviceProfile::posix_shell().unwrap();
+        let mut profile = DeviceProfile::posix_shell().unwrap();
+        profile.enable_command = Some(target.enable.clone());
         let mut device = Device::open(&session, profile, DeviceOptions::default())
             .await
             .unwrap_or_else(|error| panic!("{prefix}: {error}"));
@@ -132,5 +133,17 @@ async fn posix_shell_devices_run_commands() {
             refused.to_string().contains("no configuration mode"),
             "{prefix}: {refused}"
         );
+        device
+            .enable(&Secret::new(String::new()))
+            .await
+            .unwrap_or_else(|error| panic!("{prefix}: {error}"));
+        assert_eq!(device.mode(), Mode::Privileged, "{prefix}");
+        assert_eq!(device.send_command("id -u").await.unwrap(), "0", "{prefix}");
+        device
+            .disable()
+            .await
+            .unwrap_or_else(|error| panic!("{prefix}: {error}"));
+        assert_eq!(device.mode(), Mode::User, "{prefix}");
+        assert_ne!(device.send_command("id -u").await.unwrap(), "0", "{prefix}");
     }
 }

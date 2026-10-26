@@ -25,7 +25,7 @@ Jato is in early development; the plan for v1 is
 - Device CLIs through profiles for Cisco IOS and IOS XE, Cisco NX-OS, Arista EOS, Juniper Junos
   and POSIX shells on Linux and BSD: prompts discovered on the device, paging turned off,
   `enable`, configuration with errors reported per line (committed or rolled back on Junos),
-  shell exit statuses checked, and confirmation prompts handled.
+  shell exit statuses checked, `sudo`/`doas` for shells, and confirmation prompts handled.
 - Modern algorithms by default; older ones (SHA-1 key exchange, `ssh-rsa`, CBC ciphers,
   SHA-1 MACs) for older network devices with `Hop::allow_legacy_algorithms`.
 - Secrets are wiped from memory when dropped and never appear in `Debug` output or errors.
@@ -63,8 +63,9 @@ cargo test -- --ignored
 
 Tests against real devices and hosts, such as Sherpa lab nodes, run when they are given in
 the environment as `JATO_<KIND>_HOST`, `_USER` and `_KEY`, where `KIND` is `IOS`, `NXOS`,
-`EOS`, `JUNOS`, `UBUNTU`, `ALPINE`, `FREEBSD` or `OPENBSD`. The device tests change the
-configuration and undo it:
+`EOS`, `JUNOS`, `UBUNTU`, `ALPINE`, `FREEBSD` or `OPENBSD`. For shells, `JATO_<KIND>_ENABLE`
+sets the command that gives root (`sudo -s` if not set; `doas -s` on Alpine and OpenBSD). The
+device tests change the configuration and undo it:
 
 ```sh
 JATO_EOS_HOST=<device-address> JATO_EOS_USER=sherpa JATO_EOS_KEY=path/to/key \

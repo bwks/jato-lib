@@ -11,6 +11,9 @@ const JUNOS_PROMPT: &str = r"(?P<base>[^\s@>#]+@[^\s>#]+)[>#] ?";
 const POSIX_PROMPT_BASE: &str = "[jato]";
 /// Password prompts, as most devices word them.
 const PASSWORD_PROMPT: &str = r"[Pp]assword: ?";
+/// Password prompts from `sudo` and `doas`, such as `[sudo] password for user: ` and
+/// `doas (user@host) password: `.
+const SHELL_PASSWORD_PROMPT: &str = r".*[Pp]assword.*: ?";
 
 impl DeviceProfile {
     /// Cisco IOS and IOS XE.
@@ -31,6 +34,8 @@ impl DeviceProfile {
             decline_answer: "n".into(),
             setup_commands: vec!["terminal length 0".into(), "terminal width 511".into()],
             enable_command: Some("enable".into()),
+            enable_starts_shell: false,
+            disable_command: None,
             config: Some(ConfigMode::new(
                 r"{base}\(config[^)]*\)#",
                 "configure terminal",
@@ -59,6 +64,8 @@ impl DeviceProfile {
             decline_answer: "n\n".into(),
             setup_commands: vec!["terminal length 0".into(), "terminal width 511".into()],
             enable_command: Some("enable".into()),
+            enable_starts_shell: false,
+            disable_command: None,
             config: Some(ConfigMode::new(
                 r"{base}\(config[^)]*\)# ?",
                 "configure terminal",
@@ -87,6 +94,8 @@ impl DeviceProfile {
             decline_answer: "n".into(),
             setup_commands: vec!["terminal length 0".into(), "terminal width 32767".into()],
             enable_command: Some("enable".into()),
+            enable_starts_shell: false,
+            disable_command: None,
             config: Some(ConfigMode::new(
                 r"{base}\(config[^)]*\)#",
                 "configure terminal",
@@ -125,6 +134,8 @@ impl DeviceProfile {
                 "set cli complete-on-space off".into(),
             ],
             enable_command: None,
+            enable_starts_shell: false,
+            disable_command: None,
             config: Some(config),
             error_markers: vec![
                 "error: ".into(),
@@ -139,8 +150,12 @@ impl DeviceProfile {
     /// A POSIX shell on Linux or BSD: `sh`, `ash`, `ksh`, `bash` or `zsh`. The prompt is set to
     /// `[jato]$ `, or `[jato]# ` for root, so it does not change with the working directory.
     /// Shells mark errors only by exit status, so after each command `echo $?` is run, and a
-    /// status other than 0 is an error. There is no configuration mode, and no enable step
-    /// yet.
+    /// status other than 0 is an error. There is no configuration mode.
+    ///
+    /// [`Device::enable`](crate::Device::enable) runs `sudo -s`, giving the user's password if
+    /// asked; for `doas`, as on OpenBSD and Alpine, set `enable_command` to `doas -s`. The root
+    /// shell gets the steady prompt too, as `[jato]# `.
+    /// [`Device::disable`](crate::Device::disable) leaves it with `exit`.
     ///
     /// # Errors
     ///
@@ -155,12 +170,14 @@ impl DeviceProfile {
             )),
             user_prompt: Some(r"{base}\$ ".into()),
             privileged_prompt: "{base}# ".into(),
-            password_prompt: Prompt::new(PASSWORD_PROMPT)?,
+            password_prompt: Prompt::new(SHELL_PASSWORD_PROMPT)?,
             confirm_prompt: Prompt::new(r".*\[[yY]/[nN]\]\s*")?,
             confirm_answer: "y".into(),
             decline_answer: "n\n".into(),
             setup_commands: Vec::new(),
-            enable_command: None,
+            enable_command: Some("sudo -s".into()),
+            enable_starts_shell: true,
+            disable_command: Some("exit".into()),
             config: None,
             error_markers: Vec::new(),
             status_command: Some("echo $?".into()),
@@ -258,6 +275,16 @@ mod tests {
         assert_eq!(modes.mode_of("[jato]# "), Some(Mode::Privileged));
         assert_eq!(modes.mode_of("sherpa@ubuntu01:~$ "), None);
         assert!(posix.config.is_none());
+        assert!(
+            posix
+                .password_prompt
+                .matches("[sudo] password for sherpa: ")
+        );
+        assert!(
+            posix
+                .password_prompt
+                .matches("doas (sherpa@openbsd01) password: ")
+        );
         assert!(ModePrompts::from_prompt(&posix, "sherpa@ubuntu01:~$ ").is_err());
     }
 }

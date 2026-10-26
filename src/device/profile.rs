@@ -53,6 +53,12 @@ pub struct DeviceProfile {
     pub setup_commands: Vec<String>,
     /// The command that enters privileged mode, for devices with a user mode.
     pub enable_command: Option<String>,
+    /// Whether the enable command starts a new shell with a prompt of its own, as `sudo -s`
+    /// does. If so, the prompt setup runs again and the prompt is discovered again.
+    pub enable_starts_shell: bool,
+    /// The command that leaves privileged mode for user mode, such as `exit` from a root
+    /// shell.
+    pub disable_command: Option<String>,
     /// Configuration mode, for devices that have one.
     pub config: Option<ConfigMode>,
     /// Output lines that start with one of these mean the command failed.
@@ -207,6 +213,8 @@ mod tests {
             decline_answer: "n".into(),
             setup_commands: Vec::new(),
             enable_command: Some("enable".into()),
+            enable_starts_shell: false,
+            disable_command: None,
             config: Some(ConfigMode::new(
                 r"{base}\(config[^)]*\)#",
                 "configure terminal",

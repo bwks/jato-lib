@@ -1,6 +1,7 @@
 //! Real devices and hosts to test against, given by environment variables, such as Sherpa lab
 //! nodes. Each kind has a prefix: `JATO_<PREFIX>_HOST`, `_USER` and `_KEY` (a private key
-//! file). Tests for a kind that is not set return early.
+//! file), and for shells optionally `_ENABLE`, the command that gives root (`sudo -s` if not
+//! set). Tests for a kind that is not set return early.
 use std::env;
 
 use jato::{Auth, ConnectOptions, Hop, HostKeyPolicy, Node, Session};
@@ -11,6 +12,8 @@ pub struct Target {
     pub host: String,
     pub user: String,
     pub key: String,
+    /// The command that gives root on a shell, such as `doas -s`.
+    pub enable: String,
 }
 
 impl Target {
@@ -28,6 +31,7 @@ impl Target {
             prefix,
             user: variable("USER"),
             key: variable("KEY"),
+            enable: env::var(format!("JATO_{prefix}_ENABLE")).unwrap_or_else(|_| "sudo -s".into()),
             host,
         })
     }

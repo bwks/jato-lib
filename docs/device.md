@@ -19,7 +19,7 @@ discard commands), error markers, and an optional status command.
 | `cisco_nxos` | as IOS, with an optional trailing space | `terminal length 0`, `terminal width 511` | `y` / `n` at `(y/n)` | `% `, `ERROR: ` | Nexus 9300v 10.5(3)F |
 | `arista_eos` | as IOS | `terminal length 0`, `terminal width 32767` | Enter / `n` at `[confirm]` | `% ` | cEOS 4.35.1F |
 | `juniper_junos` | `{base}> `, `{base}# ` (no user mode) | `set cli screen-length 0`, `screen-width 1024`, `complete-on-space off` | `yes` / `no` at `[yes,no]` | `error: `, `syntax error`, `unknown command`, `missing argument` | vJunos router 25.2R1.9 |
-| `posix_shell` | `[jato]$ `, `[jato]# ` (no config mode) | sets `PS1` | `y` / `n` at `[y/N]` | exit status from `echo $?` | Ubuntu 26.04, Alpine 3.23, FreeBSD 14.2, OpenBSD 7.8 |
+| `posix_shell` | `[jato]$ `, `[jato]# ` (no config mode); enable with `sudo -s` or `doas -s` | sets `PS1` | `y` / `n` at `[y/N]` | exit status from `echo $?` | Ubuntu 26.04, Alpine 3.23, FreeBSD 14.2, OpenBSD 7.8 |
 
 Junos operational mode (`user@host>`) counts as `Mode::Privileged`, as Junos has no enable
 step. `complete-on-space off` stops the Junos CLI completing words as a line is typed, which
@@ -29,9 +29,27 @@ would change the line sent.
 working directory, so it changes with `cd`; the profile's prompt setup therefore sets a steady
 one, `[jato]$ ` or `[jato]# ` for root, and unsets bash's `PROMPT_COMMAND`. Shells do not
 mark errors in their output, so the profile's status command, `echo $?`, runs after each
-command, and a status other than 0 is an error. There is no enable step yet: `sudo -i` or
-`doas -s` starts a shell with a new prompt, which would need discovering again. csh and tcsh
-are not supported.
+command, and a status other than 0 is an error. csh and tcsh are not supported.
+
+`enable` on `posix_shell` runs `sudo -s` by default (set `enable_command` to `doas -s` for
+OpenBSD and Alpine). That starts a new shell with a prompt of its own, so the profile sets
+`enable_starts_shell`, and `enable` then:
+
+1. Sends the command and reads until the output pauses with a non-blank last line. Waiting
+   for a non-blank line matters: after a wrong password, `sudo` prints a newline and then
+   pauses for about two seconds (PAM's fail delay) before asking again.
+2. Answers a password prompt (`[sudo] password for user: `, `doas (user@host) password: `)
+   with the secret, and reads the same way. A second password prompt means it was refused:
+   empty lines are sent until `sudo` gives up, and the user's shell is back.
+3. If the user's prompt comes back instead of a new shell, as when `sudo` is not installed,
+   returns an error with the shell's last line, such as `-sh: sudo: not found`.
+4. Otherwise runs the prompt setup in the new shell, discovers its prompt (`[jato]# `), and
+   rebuilds the mode prompts.
+
+`disable` leaves privileged mode with the profile's disable command, `exit` for
+`posix_shell`, back to the user's shell and its `[jato]$ ` prompt. It does nothing in user
+mode. It only leaves shells that `enable` started: if the session has been root since login,
+`exit` would end it, so `disable` refuses. The network profiles have no disable command yet.
 
 ## Opening
 
@@ -83,6 +101,9 @@ Without a device, a family's tests return early and show as passed.
 
 `tests/integration/hosts.rs` runs `run`, an SCP round trip with its mode checked, a shell, and
 a `posix_shell` device (output with prompt characters, `cd` keeping the prompt, a failing
-command's exit status, `send_config` refused) on Linux and BSD hosts given the same way
-(`UBUNTU`, `ALPINE`, `FREEBSD`, `OPENBSD`). It was run against Ubuntu 26.04, Alpine 3.23,
+command's exit status, `send_config` refused, `enable` to root and `disable` back) on Linux and BSD hosts given
+the same way (`UBUNTU`, `ALPINE`, `FREEBSD`, `OPENBSD`), with `JATO_<KIND>_ENABLE` for the
+enable command (`doas -s` for Alpine and OpenBSD). `tests/integration/posix.rs` tests
+`enable` with a `sudo` password, a wrong password and a missing `doas`, and `disable`, against the test
+container, whose image allows the test user `sudo` with its password. It was run against Ubuntu 26.04, Alpine 3.23,
 FreeBSD 14.2 and OpenBSD 7.8.
