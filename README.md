@@ -20,6 +20,9 @@ Jato is in early development; the plan for v1 is
 - Running commands without a terminal: stdin, separate stdout and stderr, and the exit
   status or signal, collected with a time limit or streamed.
 - Copying single files with SCP, through the server's `scp` program.
+- Interactive shells on a PTY, with prompt matching and cleaned command output.
+- Device CLIs through profiles (Cisco IOS and IOS XE so far): paging turned off, `enable`,
+  configuration mode with errors reported per line, and confirmation prompts handled.
 - Modern algorithms by default; older ones (SHA-1 key exchange, `ssh-rsa`, CBC ciphers,
   SHA-1 MACs) for older network devices with `Hop::allow_legacy_algorithms`.
 - Secrets are wiped from memory when dropped and never appear in `Debug` output or errors.
@@ -53,4 +56,12 @@ Docker and also need `ssh-keygen` and `ssh-agent`:
 ```sh
 docker build -t jato-test-sshd tests/sshd
 cargo test -- --ignored
+```
+
+The Cisco IOS tests also need a device, such as a Sherpa `cisco_iosv` lab node. They change
+its configuration and undo it, and are skipped unless `JATO_IOS_HOST` is set:
+
+```sh
+JATO_IOS_HOST=<device-address> JATO_IOS_USER=sherpa JATO_IOS_KEY=path/to/key \
+  cargo test ios:: -- --ignored
 ```

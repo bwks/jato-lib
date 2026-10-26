@@ -27,12 +27,13 @@ Phase 2, network device drivers:
 
 | Module | Purpose |
 | ------ | ------- |
-| `shell` | Interactive shell on a PTY, with prompt detection |
-| `device` | Device profiles: prompts, paging, privilege escalation, config mode |
+| `shell` | Interactive shell on a PTY, with prompt detection (done) |
+| `device` | Device profiles: prompts, paging, privilege escalation, config mode (Cisco IOS done) |
 
 How a connection is made, checked and authenticated: [connecting.md](connecting.md).
 How commands run: [exec.md](exec.md).
 How files are copied with SCP: [scp.md](scp.md).
+Interactive shells: [shell.md](shell.md). Device CLIs: [device.md](device.md).
 
 Integration tests live in `tests/integration/`, run against disposable SSH servers in Docker
 (image in `tests/sshd/`), and are marked `#[ignore]`.

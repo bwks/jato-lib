@@ -66,7 +66,7 @@ pub struct Exec {
 }
 
 /// The receiving side of an exec channel.
-struct Events {
+pub(crate) struct Events {
     /// Events that arrived while waiting for the server to accept the command.
     pending: VecDeque<Event>,
     read: ChannelReadHalf,
@@ -116,25 +116,12 @@ impl Session {
             .map_err(|error| Error::protocol(node.clone(), error))?;
         let (mut read, write) = channel.split();
         let mut pending = VecDeque::new();
-        loop {
-            let Some(message) = read.wait().await else {
-                return Err(Error::ExecRefused { node });
-            };
-            match message {
-                ChannelMsg::Success => break,
-                ChannelMsg::Failure => return Err(Error::ExecRefused { node }),
-                message => match step(message) {
-                    Step::Event(event) => pending.push_back(event),
-                    Step::Closed => return Err(Error::ExecRefused { node }),
-                    Step::Eof | Step::Other => {
-                        tracing::trace!("waiting for the server to accept the command");
-                    }
-                },
-            }
+        if !accepted(&mut read, &mut pending).await {
+            return Err(Error::ExecRefused { node });
         }
         Ok(Exec {
             node,
-            events: Events { pending, read },
+            events: Events::new(read, pending),
             write,
         })
     }
@@ -197,8 +184,13 @@ impl Exec {
 }
 
 impl Events {
+    /// Events from `read`, starting with those already `pending`.
+    pub(crate) fn new(read: ChannelReadHalf, pending: VecDeque<Event>) -> Self {
+        Self { pending, read }
+    }
+
     /// The next event, or `None` once the channel has closed.
-    async fn next(&mut self) -> Option<Event> {
+    pub(crate) async fn next(&mut self) -> Option<Event> {
         if let Some(event) = self.pending.pop_front() {
             return Some(event);
         }
@@ -228,6 +220,27 @@ impl Events {
             }
         }
         output
+    }
+}
+
+/// Wait for the server's answer to a request sent with `want_reply`, keeping any output that
+/// arrives first in `pending`. Whether the server accepted it.
+pub(crate) async fn accepted(read: &mut ChannelReadHalf, pending: &mut VecDeque<Event>) -> bool {
+    loop {
+        let Some(message) = read.wait().await else {
+            return false;
+        };
+        match message {
+            ChannelMsg::Success => return true,
+            ChannelMsg::Failure => return false,
+            message => match step(message) {
+                Step::Event(event) => pending.push_back(event),
+                Step::Closed => return false,
+                Step::Eof | Step::Other => {
+                    tracing::trace!("waiting for the server to accept the request");
+                }
+            },
+        }
     }
 }
 

@@ -4,6 +4,8 @@
 //! `docker build -t jato-test-sshd tests/sshd`. Run them with `cargo test -- --ignored`.
 mod connect;
 mod exec;
+mod ios;
 mod jump;
 mod scp;
+mod shell;
 mod support;

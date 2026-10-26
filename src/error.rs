@@ -87,6 +87,57 @@ pub enum Error {
         message: String,
     },
 
+    /// The server refused a terminal or an interactive shell.
+    #[error("{node}: the server refused an interactive shell")]
+    ShellRefused {
+        /// The server.
+        node: Node,
+    },
+
+    /// The expected prompt did not appear in time. `last_line` is the last line received,
+    /// usually the prompt that was not recognised; the rest of the output is not kept, as it
+    /// may hold secrets.
+    #[error("{node}: prompt not found after {after:?}; the last line was {last_line:?}")]
+    PromptNotFound {
+        /// The server.
+        node: Node,
+        /// How long Jato waited.
+        after: Duration,
+        /// The last line received.
+        last_line: String,
+    },
+
+    /// The shell closed while Jato was waiting for a prompt.
+    #[error("{node}: the shell closed; the last line was {last_line:?}")]
+    ShellClosed {
+        /// The server.
+        node: Node,
+        /// The last line received.
+        last_line: String,
+    },
+
+    /// A device reported an error, or did not do what was asked. `step` says what was being
+    /// done, such as `enable` or `config line 3`, never the command itself, which may hold a
+    /// secret.
+    #[error("{node}: {step} failed: {message}")]
+    DeviceCommand {
+        /// The device.
+        node: Node,
+        /// What was being done.
+        step: String,
+        /// The device's message, or what went wrong.
+        message: String,
+    },
+
+    /// A prompt pattern is not a valid regular expression.
+    #[error("invalid prompt pattern {pattern:?}: {message}")]
+    InvalidPrompt {
+        /// The pattern.
+        pattern: String,
+        /// Why it is not valid.
+        message: String,
+    },
+
     /// The SSH protocol failed with a server.
     #[error("SSH protocol error with {node}")]
     Protocol {
