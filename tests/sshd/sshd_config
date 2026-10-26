@@ -10,4 +10,3 @@ PermitRootLogin no
 # The authorized_keys file is mounted from the host, with the host user's ownership.
 StrictModes no
 MaxAuthTries 10
-Subsystem sftp internal-sftp

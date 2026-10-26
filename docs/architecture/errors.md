@@ -40,6 +40,7 @@ graph LR
     subgraph Commands and copies
         ExecRefused
         Scp
+        Sftp
     end
     subgraph Shells
         ShellRefused
@@ -58,13 +59,14 @@ graph LR
 | ------- | ----------- |
 | `Connect` | The TCP connection to the first hop fails |
 | `Tunnel` | A jump host cannot open a tunnel to the next hop (names both) |
-| `Timeout` | An operation runs past its limit; `operation` says which (`connect`, `authentication`, `command`, `scp upload`, `scp download`) |
+| `Timeout` | An operation runs past its limit; `operation` says which (`connect`, `authentication`, `command`, `scp upload`, `scp download`, `sftp start`, `sftp request`) |
 | `HostKeyUnknown`, `HostKeyChanged`, `HostKeyRevoked` | The host key check refuses the server; they give the key's fingerprint, the `known_hosts` file and, where there is one, the line |
 | `AuthFailed` | No credential is accepted; lists each attempt and why credentials were skipped |
 | `Protocol` | The SSH protocol fails, wrapping the `russh` error |
 | `Io` | A local I/O operation fails, such as reading `known_hosts` |
 | `ExecRefused` | The server will not run a command |
 | `Scp` | A copy fails, with the remote program's message |
+| `Sftp` | An SFTP operation fails, naming it and the path, with the server's status code and message |
 | `ShellRefused` | The server will not give a PTY or a shell |
 | `PromptNotFound` | The prompt does not appear in time; gives the last line |
 | `EchoNotSeen` | The prompt came back without the command's echo |

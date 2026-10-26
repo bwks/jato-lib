@@ -87,6 +87,23 @@ pub enum Error {
         message: String,
     },
 
+    /// An SFTP operation failed. `code` is the server's status code where it sent one (such
+    /// as 2, no such file, or 3, permission denied), and `message` its message or what went
+    /// wrong.
+    #[error("{node}: sftp {operation} of {path:?} failed: {message}")]
+    Sftp {
+        /// The server.
+        node: Node,
+        /// What was being done, such as `upload` or `mkdir`.
+        operation: &'static str,
+        /// The remote path involved.
+        path: String,
+        /// The server's SFTP status code, if it sent one.
+        code: Option<u32>,
+        /// The server's message, or what went wrong.
+        message: String,
+    },
+
     /// The server refused a terminal or an interactive shell.
     #[error("{node}: the server refused an interactive shell")]
     ShellRefused {

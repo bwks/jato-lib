@@ -4,10 +4,13 @@
 
 mod device;
 mod scp;
+mod sftp;
 mod shared;
 mod ssh;
 
 pub use device::{ConfigMode, Device, DeviceOptions, DeviceProfile, Mode};
+pub use sftp::attrs::Metadata;
+pub use sftp::client::Sftp;
 pub use shared::error::Error;
 pub use shared::node::Node;
 pub use shared::secret::Secret;

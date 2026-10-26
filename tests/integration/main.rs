@@ -12,5 +12,6 @@ mod hosts;
 mod jump;
 mod posix;
 mod scp;
+mod sftp;
 mod shell;
 mod support;

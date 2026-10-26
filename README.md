@@ -20,6 +20,9 @@ Jato is in early development; the plan for v1 is
   (plain, hashed, wildcard and negated entries, `@revoked` markers), or `Insecure` by choice.
 - Running commands without a terminal: stdin, separate stdout and stderr, and the exit
   status or signal, collected with a time limit or streamed.
+- File transfer with Jato's own SFTP client: uploads written to a temporary file with the
+  final mode and renamed into place, so a secret is never briefly readable by others;
+  downloads, `mkdir -p`, renames and file attributes.
 - Copying single files with SCP, through the server's `scp` program.
 - Interactive shells on a PTY: prompt discovery, prompt matching that waits for each
   command's echo, and cleaned command output.

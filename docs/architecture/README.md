@@ -11,6 +11,7 @@ its document here, or add one and list it below.
 | [connecting.md](connecting.md) | Connections, jump hosts, host key checking, algorithms, authentication |
 | [exec.md](exec.md) | Running commands over an exec channel |
 | [scp.md](scp.md) | Copying files with SCP |
+| [sftp.md](sftp.md) | File transfer with Jato's own SFTP client, and safe uploads |
 | [shell.md](shell.md) | Interactive shells on a PTY, prompt matching and discovery |
 | [device.md](device.md) | Device CLIs: profiles, modes, enable, configuration |
 | [errors.md](errors.md) | The error type and what errors may and may not contain |
@@ -35,9 +36,9 @@ of them: run a command on a Linux host with `Session::run`, or drive a router's 
  └──────┬───────────────────┘       │                      │
  ┌──────▼───────────────────┐ ┌─────▼──────────────┐ ┌─────▼─────────────┐
  │ Interactive shell        │ │ Commands           │ │ File copies       │
- │ (ssh/shell.rs) PTY,      │ │ (ssh/exec.rs)      │ │ (scp/) through    │
- │ prompts, discovery, echo │ │ stdin, stdout,     │ │ the remote `scp`  │
- │ sync                     │ │ stderr, exit       │ │                   │
+ │ (ssh/shell.rs) PTY,      │ │ (ssh/exec.rs)      │ │ (sftp/) own SFTP  │
+ │ prompts, discovery, echo │ │ stdin, stdout,     │ │ client; (scp/)    │
+ │ sync                     │ │ stderr, exit       │ │ via remote `scp`  │
  └──────┬───────────────────┘ └─────┬──────────────┘ └─────┬─────────────┘
  ┌──────▼──────────────────────────▼──────────────────────▼─────────────┐
  │ Session  (ssh/connect.rs)                                            │
@@ -78,6 +79,10 @@ src/
   scp/                SCP copies (methods on Session)
     protocol.rs       headers, replies, quoting, path checks
     copy.rs           upload and download
+  sftp/               Jato's own SFTP version 3 client
+    packet.rs         requests and replies, encoded and decoded
+    attrs.rs          Metadata
+    client.rs         Sftp: uploads, downloads, directories, renames
   device/             device CLIs over a shell
     cli.rs            Device, DeviceOptions
     profile.rs        DeviceProfile, ConfigMode, Mode; prompts from a discovered prompt
@@ -98,6 +103,7 @@ src/
 | `ssh::exec` | `Exec`, `Event`, `Exit`, `Output` | Commands over an exec channel |
 | `ssh::shell` | `Shell`, `ShellOptions`, `Prompt` | PTY shells, prompt matching, discovery, output cleaning |
 | `scp` | (methods on `Session`) | Single-file copies through the remote `scp` program |
+| `sftp` | `Sftp`, `Metadata` | File transfer over the `sftp` subsystem; uploads through a temporary file and a rename |
 | `device` | `Device`, `DeviceOptions`, `DeviceProfile`, `ConfigMode`, `Mode` | Device CLIs driven through a shell |
 
 How the modules depend on each other (an arrow means "uses"):
@@ -109,6 +115,9 @@ graph TD
     end
     subgraph scp_area[scp]
         scp[scp]
+    end
+    subgraph sftp_area[sftp]
+        sftp[sftp]
     end
     subgraph ssh_area[ssh]
         shell[shell]
@@ -127,6 +136,8 @@ graph TD
     exec --> connect
     scp --> exec
     scp --> connect
+    sftp --> channel
+    sftp --> connect
     connect --> auth
     connect --> host_key
     connect --> algorithms
@@ -157,6 +168,7 @@ classDiagram
         exec(command) Exec
         scp_upload(path, data, mode, timeout)
         scp_download(path, timeout)
+        sftp(timeout) Sftp
         shell(options) Shell
         close()
     }
@@ -167,6 +179,15 @@ classDiagram
         read_until_quiet(idle, timeout)
         discover_prompt(idle, timeout)
         command(command, prompt, timeout)
+    }
+    class Sftp {
+        upload(path, data, mode)
+        download(path)
+        metadata(path)
+        exists(path)
+        create_dir_all(path, mode)
+        rename(from, to)
+        remove_file(path)
     }
     class Device {
         open(session, profile, options)
@@ -187,6 +208,7 @@ classDiagram
     }
     Session ..> Hop : connects through
     Session --> Shell : opens
+    Session --> Sftp : opens
     Device --> Shell : drives
     Device --> DeviceProfile : follows
 ```

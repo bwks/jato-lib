@@ -11,6 +11,8 @@ pub const IMAGE: &str = "jato-test-sshd";
 pub const USER: &str = "jato";
 pub const PASSWORD: &str = "jato-test-password";
 pub const PASSPHRASE: &str = "jato-test-passphrase";
+/// The SFTP server, unless a test passes its own `Subsystem=` option.
+const DEFAULT_SUBSYSTEM: &str = "Subsystem=sftp internal-sftp";
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -73,8 +75,14 @@ impl Sshd {
         fs::write(dir.join("authorized_keys"), authorized).unwrap();
 
         let mut sshd = String::from("ssh-keygen -A && exec /usr/sbin/sshd -D -e");
+        if !options
+            .iter()
+            .any(|option| option.starts_with("Subsystem="))
+        {
+            sshd.push_str(&format!(" -o '{DEFAULT_SUBSYSTEM}'"));
+        }
         for option in options {
-            sshd.push_str(&format!(" -o {option}"));
+            sshd.push_str(&format!(" -o '{option}'"));
         }
         let mount = format!(
             "{}:/home/{USER}/.ssh/authorized_keys:ro",

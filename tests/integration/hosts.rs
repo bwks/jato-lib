@@ -147,3 +147,51 @@ async fn posix_shell_devices_run_commands() {
         assert_ne!(device.send_command("id -u").await.unwrap(), "0", "{prefix}");
     }
 }
+
+#[tokio::test]
+#[ignore]
+async fn files_copy_with_sftp() {
+    for prefix in PREFIXES {
+        let Some(target) = Target::from_env(prefix) else {
+            continue;
+        };
+        let session = target.connect().await;
+        let mut sftp = session
+            .sftp(TIMEOUT)
+            .await
+            .unwrap_or_else(|error| panic!("{prefix}: {error}"));
+        let data: Vec<u8> = (0..300 * 1024).map(|i| (i % 251) as u8).collect();
+        sftp.create_dir_all("jato-sftp-test/inner", 0o700)
+            .await
+            .unwrap_or_else(|error| panic!("{prefix}: {error}"));
+        sftp.upload("jato-sftp-test/inner/file", &data, 0o600)
+            .await
+            .unwrap_or_else(|error| panic!("{prefix}: {error}"));
+        sftp.upload("jato-sftp-test/inner/file", &data, 0o600)
+            .await
+            .unwrap_or_else(|error| panic!("{prefix}: replacing: {error}"));
+        assert_eq!(
+            sftp.download("jato-sftp-test/inner/file").await.unwrap(),
+            data,
+            "{prefix}"
+        );
+        let check = session
+            .run(
+                "find jato-sftp-test -perm 0700 -type d; find jato-sftp-test -perm 0600 -type f; \
+                 ls -a jato-sftp-test/inner",
+                b"",
+                TIMEOUT,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&check.stdout),
+            "jato-sftp-test\njato-sftp-test/inner\njato-sftp-test/inner/file\n.\n..\nfile\n",
+            "{prefix}"
+        );
+        session
+            .run("rm -rf jato-sftp-test", b"", TIMEOUT)
+            .await
+            .unwrap();
+    }
+}
