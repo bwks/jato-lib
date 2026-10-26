@@ -8,8 +8,8 @@ use sha1::Sha1;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 
-use crate::error::Error;
-use crate::node::Node;
+use crate::shared::error::Error;
+use crate::shared::node::Node;
 
 /// The port a `known_hosts` entry names without brackets.
 const DEFAULT_SSH_PORT: u16 = 22;

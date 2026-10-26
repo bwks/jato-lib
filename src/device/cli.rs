@@ -1,11 +1,11 @@
 use std::time::Duration;
 
-use crate::connect::Session;
 use crate::device::profile::{DeviceProfile, Mode, ModePrompts};
-use crate::error::Error;
-use crate::node::Node;
-use crate::secret::Secret;
-use crate::shell::{Prompt, Shell, ShellOptions, command_output, last_line};
+use crate::shared::error::Error;
+use crate::shared::node::Node;
+use crate::shared::secret::Secret;
+use crate::ssh::connect::Session;
+use crate::ssh::shell::{Prompt, Shell, ShellOptions, command_output, last_line};
 
 /// The time limit for each command by default.
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);

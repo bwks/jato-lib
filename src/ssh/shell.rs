@@ -6,10 +6,11 @@ use russh::ChannelWriteHalf;
 use russh::client::Msg;
 use tokio::time::{self, Instant};
 
-use crate::connect::Session;
-use crate::error::Error;
-use crate::exec::{Event, Events, accepted};
-use crate::node::Node;
+use crate::shared::error::Error;
+use crate::shared::node::Node;
+use crate::ssh::channel::{Events, accepted};
+use crate::ssh::connect::Session;
+use crate::ssh::exec::Event;
 
 /// The terminal type requested by default. `dumb` stops device CLIs redrawing lines.
 const DEFAULT_TERM: &str = "dumb";

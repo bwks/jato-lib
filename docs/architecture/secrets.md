@@ -1,6 +1,6 @@
 # Secrets
 
-Passwords, private keys and passphrases are held in `jato::Secret` (`src/secret.rs`).
+Passwords, private keys and passphrases are held in `jato::Secret` (`src/shared/secret.rs`).
 
 ## Secret
 

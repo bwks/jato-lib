@@ -35,73 +35,110 @@ of them: run a command on a Linux host with `Session::run`, or drive a router's 
  └──────┬───────────────────┘       │                      │
  ┌──────▼───────────────────┐ ┌─────▼──────────────┐ ┌─────▼─────────────┐
  │ Interactive shell        │ │ Commands           │ │ File copies       │
- │ (shell.rs) PTY, prompts, │ │ (exec.rs) stdin,   │ │ (scp.rs) through  │
- │ discovery, echo sync     │ │ stdout, stderr,    │ │ the remote `scp`  │
- │                          │ │ exit status        │ │                   │
+ │ (ssh/shell.rs) PTY,      │ │ (ssh/exec.rs)      │ │ (scp/) through    │
+ │ prompts, discovery, echo │ │ stdin, stdout,     │ │ the remote `scp`  │
+ │ sync                     │ │ stderr, exit       │ │                   │
  └──────┬───────────────────┘ └─────┬──────────────┘ └─────┬─────────────┘
  ┌──────▼──────────────────────────▼──────────────────────▼─────────────┐
- │ Session  (connect.rs)                                                │
+ │ Session  (ssh/connect.rs)                                            │
  │ hops and jump chains, time limits, one russh connection per hop      │
- │   uses: auth.rs (credentials, attempt order)                         │
- │         host_key.rs (known_hosts, policies)                          │
- │         algorithms.rs (modern by default, legacy by opt-in)          │
+ │   uses: ssh/auth.rs (credentials, attempt order)                     │
+ │         ssh/host_key.rs (known_hosts, policies)                      │
+ │         ssh/algorithms.rs (modern by default, legacy by opt-in)      │
  └──────┬───────────────────────────────────────────────────────────────┘
  ┌──────▼───────────────────────────────────────────────────────────────┐
  │ russh (SSH protocol)        tokio (async I/O, timers)                │
  └──────────────────────────────────────────────────────────────────────┘
 
- Across all layers: error.rs (one Error type), secret.rs (Secret), node.rs (Node)
+ Across all layers, in shared/: error.rs (Error), secret.rs (Secret), node.rs (Node),
+ time.rs (time limits)
 ```
 
 ## Modules
 
-Every module is private; `lib.rs` re-exports the public types, so the module layout can
-change without changing the API.
+The source is grouped by area. Every module is private; `lib.rs` re-exports the public types,
+so the layout can change without changing the API. `mod.rs` files hold only declarations.
+
+```text
+src/
+  lib.rs              re-exports the public API
+  shared/             used across the library
+    error.rs          Error
+    node.rs           Node
+    secret.rs         Secret
+    time.rs           within(): the time limit helper
+  ssh/                the SSH connection and its channels
+    connect.rs        Session, Hop, ConnectOptions; jump chains
+    auth.rs           Auth; attempt order; logging in
+    host_key.rs       HostKeyPolicy; known_hosts
+    algorithms.rs     algorithm lists, legacy by opt-in
+    channel.rs        channel messages to stdout/stderr/exit events
+    exec.rs           Exec, Event, Exit, Output; commands
+    shell.rs          Shell, ShellOptions, Prompt; PTY shells
+  scp/                SCP copies (methods on Session)
+    protocol.rs       headers, replies, quoting, path checks
+    copy.rs           upload and download
+  device/             device CLIs over a shell
+    cli.rs            Device, DeviceOptions
+    profile.rs        DeviceProfile, ConfigMode, Mode; prompts from a discovered prompt
+    profiles.rs       the built-in profiles
+```
 
 | Module | Public types | Purpose |
 | ------ | ------------ | ------- |
-| `node` | `Node` | A server's host and port, used in settings and errors |
-| `secret` | `Secret` | A password, key or passphrase, wiped on drop, redacted in `Debug` |
-| `error` | `Error` | The one error type, grown per module, `#[non_exhaustive]` |
-| `auth` | `Auth` | Credentials, the order they are tried, and logging in through `russh` |
-| `host_key` | `HostKeyPolicy` | `known_hosts` matching, the policies, recording new keys |
-| `algorithms` | (none) | The algorithm lists offered in the handshake, with legacy ones by opt-in |
-| `connect` | `Session`, `Hop`, `ConnectOptions` | Direct connections and jump chains |
-| `exec` | `Exec`, `Event`, `Exit`, `Output` | Commands over an exec channel |
+| `shared::node` | `Node` | A server's host and port, used in settings and errors |
+| `shared::secret` | `Secret` | A password, key or passphrase, wiped on drop, redacted in `Debug` |
+| `shared::error` | `Error` | The one error type, grown per module, `#[non_exhaustive]` |
+| `shared::time` | (none) | Running an operation within a time limit, as `Error::Timeout` |
+| `ssh::auth` | `Auth` | Credentials, the order they are tried, and logging in through `russh` |
+| `ssh::host_key` | `HostKeyPolicy` | `known_hosts` matching, the policies, recording new keys |
+| `ssh::algorithms` | (none) | The algorithm lists offered in the handshake, with legacy ones by opt-in |
+| `ssh::connect` | `Session`, `Hop`, `ConnectOptions` | Direct connections and jump chains |
+| `ssh::channel` | (none) | Channel messages as events; waiting for a request's reply |
+| `ssh::exec` | `Exec`, `Event`, `Exit`, `Output` | Commands over an exec channel |
+| `ssh::shell` | `Shell`, `ShellOptions`, `Prompt` | PTY shells, prompt matching, discovery, output cleaning |
 | `scp` | (methods on `Session`) | Single-file copies through the remote `scp` program |
-| `shell` | `Shell`, `ShellOptions`, `Prompt` | PTY shells, prompt matching, discovery, output cleaning |
 | `device` | `Device`, `DeviceOptions`, `DeviceProfile`, `ConfigMode`, `Mode` | Device CLIs driven through a shell |
-
-The `device` module is split into `cli.rs` (`Device`), `profile.rs` (`DeviceProfile`,
-`ConfigMode`, `Mode`, and turning a discovered prompt into mode prompts) and `profiles.rs`
-(the built-in profiles).
 
 How the modules depend on each other (an arrow means "uses"):
 
 ```mermaid
 graph TD
-    device[device] --> shell[shell]
-    device --> connect[connect]
-    shell --> exec[exec]
+    subgraph device_area[device]
+        device[device]
+    end
+    subgraph scp_area[scp]
+        scp[scp]
+    end
+    subgraph ssh_area[ssh]
+        shell[shell]
+        exec[exec]
+        channel[channel]
+        connect[connect]
+        auth[auth]
+        host_key[host_key]
+        algorithms[algorithms]
+    end
+    device --> shell
+    device --> connect
+    shell --> channel
     shell --> connect
-    scp[scp] --> exec
-    scp --> connect
+    exec --> channel
     exec --> connect
-    connect --> auth[auth]
-    connect --> host_key[host_key]
-    connect --> algorithms[algorithms]
-    auth --> secret[secret]
-    device --> secret
+    scp --> exec
+    scp --> connect
+    connect --> auth
+    connect --> host_key
+    connect --> algorithms
     connect --> russh[(russh)]
+    channel --> russh
     auth --> russh
     host_key --> russh
-    exec --> russh
 ```
 
-`error` and `node` are used by every module and are left out of the graph. `shell` uses
-`exec` for the channel event plumbing (turning `russh` channel messages into stdout,
-stderr and exit events, and waiting for the server to accept a request), not for running
-commands.
+`shared` (error, node, secret, time) is used by every module and is left out of the graph.
+`channel` holds what `exec` and `shell` share: turning `russh` channel messages into stdout,
+stderr and exit events, and waiting for the server to accept a request.
 
 ## Main types
 

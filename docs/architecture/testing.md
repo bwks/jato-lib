@@ -17,7 +17,7 @@ helpers in `support/` are compiled once.
 Pure logic is kept in functions that do no I/O, so it can be tested directly:
 `known_hosts` matching (`host_key::verdict`), the order of authentication attempts
 (`Auth::attempts`), algorithm lists, SCP headers and quoting, channel messages to events
-(`exec::step`), ANSI stripping and output cleaning, prompt matching, echo checks, and turning
+(`ssh::channel::step`), ANSI stripping and output cleaning, prompt matching, echo checks, and turning
 a discovered prompt into mode prompts (`ModePrompts::from_prompt`).
 
 ## The test container

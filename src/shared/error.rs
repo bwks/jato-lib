@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::node::Node;
+use crate::shared::node::Node;
 
 /// Errors returned by Jato.
 ///

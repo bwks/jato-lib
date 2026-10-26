@@ -1,6 +1,6 @@
 # Errors
 
-Jato has one error type, `jato::Error` (`src/error.rs`), a `thiserror` enum marked
+Jato has one error type, `jato::Error` (`src/shared/error.rs`), a `thiserror` enum marked
 `#[non_exhaustive]`: variants are added as the library grows, so callers match with a
 wildcard arm. There is no `Result` alias.
 

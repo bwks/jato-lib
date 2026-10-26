@@ -1,7 +1,7 @@
 use regex::Regex;
 
-use crate::error::Error;
-use crate::shell::Prompt;
+use crate::shared::error::Error;
+use crate::ssh::shell::Prompt;
 
 /// The placeholder for the discovered prompt's base in a prompt template.
 const BASE_PLACEHOLDER: &str = "{base}";

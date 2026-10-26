@@ -9,7 +9,7 @@ waits for the server's answer. `Failure`, or the channel closing first, is
 `Error::ExecRefused`. Output that arrives before the answer is kept and returned first.
 There is no terminal (no PTY), so stdout and stderr stay separate and nothing is echoed.
 
-Channel messages map to events (`exec::step`):
+Channel messages map to events (`ssh::channel::step`, shared with shells):
 
 | Message | Event |
 | ------- | ----- |

@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::fmt;
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,13 +8,13 @@ use russh::keys::PublicKeyOrCertificate;
 use russh::{Disconnect, Preferred};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::time;
 
-use crate::algorithms;
-use crate::auth::{self, Auth};
-use crate::error::Error;
-use crate::host_key::{self, HostKeyPolicy};
-use crate::node::Node;
+use crate::shared::error::Error;
+use crate::shared::node::Node;
+use crate::shared::time::within;
+use crate::ssh::algorithms;
+use crate::ssh::auth::{self, Auth};
+use crate::ssh::host_key::{self, HostKeyPolicy};
 
 /// How long to wait for a TCP connection and the SSH handshake, by default.
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -304,22 +303,4 @@ async fn disconnect(handle: &Handle<Client>, node: &Node) -> Result<(), Error> {
         .disconnect(Disconnect::ByApplication, "", "en")
         .await
         .map_err(|error| Error::protocol(node.clone(), error))
-}
-
-/// Run `operation` with `node`, failing with [`Error::Timeout`] if it takes longer than
-/// `limit`.
-pub(crate) async fn within<T>(
-    limit: Duration,
-    operation: &'static str,
-    node: &Node,
-    future: impl Future<Output = Result<T, Error>>,
-) -> Result<T, Error> {
-    match time::timeout(limit, future).await {
-        Ok(result) => result,
-        Err(_) => Err(Error::Timeout {
-            operation,
-            node: node.clone(),
-            after: limit,
-        }),
-    }
 }

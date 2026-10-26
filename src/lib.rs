@@ -2,24 +2,17 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(not(test), forbid(unsafe_code))]
 
-mod algorithms;
-mod auth;
-mod connect;
 mod device;
-mod error;
-mod exec;
-mod host_key;
-mod node;
 mod scp;
-mod secret;
-mod shell;
+mod shared;
+mod ssh;
 
-pub use auth::Auth;
-pub use connect::{ConnectOptions, Hop, Session};
 pub use device::{ConfigMode, Device, DeviceOptions, DeviceProfile, Mode};
-pub use error::Error;
-pub use exec::{Event, Exec, Exit, Output};
-pub use host_key::HostKeyPolicy;
-pub use node::Node;
-pub use secret::Secret;
-pub use shell::{Prompt, Shell, ShellOptions};
+pub use shared::error::Error;
+pub use shared::node::Node;
+pub use shared::secret::Secret;
+pub use ssh::auth::Auth;
+pub use ssh::connect::{ConnectOptions, Hop, Session};
+pub use ssh::exec::{Event, Exec, Exit, Output};
+pub use ssh::host_key::HostKeyPolicy;
+pub use ssh::shell::{Prompt, Shell, ShellOptions};

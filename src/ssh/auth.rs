@@ -10,9 +10,9 @@ use russh::keys::agent::client::AgentClient;
 use russh::keys::{Algorithm, HashAlg, PrivateKeyWithHashAlg, decode_secret_key};
 use tokio::fs;
 
-use crate::error::Error;
-use crate::node::Node;
-use crate::secret::Secret;
+use crate::shared::error::Error;
+use crate::shared::node::Node;
+use crate::shared::secret::Secret;
 
 /// The default identity files, in the order they are tried, under the user's `~/.ssh`.
 pub(crate) const DEFAULT_IDENTITY_FILES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];

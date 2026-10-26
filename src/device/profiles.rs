@@ -1,6 +1,6 @@
 use crate::device::profile::{ConfigMode, DeviceProfile};
-use crate::error::Error;
-use crate::shell::Prompt;
+use crate::shared::error::Error;
+use crate::ssh::shell::Prompt;
 
 /// A Cisco or Arista prompt in any mode: the hostname, a configuration sub-mode, then `>` or
 /// `#`.
