@@ -36,7 +36,7 @@ Jato is in early development; the plan for v1 is
   resizes and the exit status.
 - With the `terminal` feature: `TerminalPrompter`, which asks OpenSSH's questions on the
   terminal, and `Session::interactive_shell`, which runs `ssh host` in the local terminal
-  (raw mode, resizes, `~.`, Windows consoles included).
+  (raw mode, resizes, `~.`, Windows consoles included), with no `unsafe` code.
 - Interactive shells on a PTY: prompt discovery, prompt matching that waits for each
   command's echo, and cleaned command output.
 - Device CLIs through profiles for Cisco IOS and IOS XE, Cisco NX-OS, Arista EOS, Juniper Junos

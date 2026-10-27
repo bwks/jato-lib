@@ -1,6 +1,6 @@
 //! Jato: SSH connections to hosts and network devices.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
-#![cfg_attr(not(test), deny(unsafe_code))]
+#![cfg_attr(not(test), forbid(unsafe_code))]
 
 mod device;
 mod scp;

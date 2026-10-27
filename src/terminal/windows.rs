@@ -2,71 +2,54 @@
 //! the VT byte sequences a remote shell expects, and virtual-terminal output, so the console
 //! draws the escape sequences the shell sends.
 //!
-//! This is the only module in Jato with `unsafe` code: three Win32 console calls.
+//! The console calls go through `crossterm_winapi`'s safe wrappers, as crossterm's own raw
+//! mode does, so Jato has no `unsafe` code.
 
 use std::io;
 
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::System::Console::{
-    CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
-    GetConsoleMode, GetStdHandle, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
-};
+use crossterm_winapi::{ConsoleMode, Handle};
+
+/// `ENABLE_VIRTUAL_TERMINAL_INPUT`: the console reports keys as VT sequences.
+const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
+/// `ENABLE_VIRTUAL_TERMINAL_PROCESSING`: the console draws VT sequences it is sent.
+const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
 
 /// The console modes before [`enable_virtual_terminal`], for [`restore`].
 pub(crate) struct ConsoleModes {
-    input: CONSOLE_MODE,
-    output: CONSOLE_MODE,
+    input: u32,
+    output: u32,
 }
 
 /// Turn on virtual-terminal input and output, keeping the other mode flags.
 pub(crate) fn enable_virtual_terminal() -> io::Result<ConsoleModes> {
-    let input = mode(STD_INPUT_HANDLE)?;
-    let output = mode(STD_OUTPUT_HANDLE)?;
-    set_mode(STD_INPUT_HANDLE, input | ENABLE_VIRTUAL_TERMINAL_INPUT)?;
-    if let Err(error) = set_mode(
-        STD_OUTPUT_HANDLE,
-        output | ENABLE_VIRTUAL_TERMINAL_PROCESSING,
-    ) {
-        if let Err(restore) = set_mode(STD_INPUT_HANDLE, input) {
-            tracing::warn!(error = %restore, "Failed to restore the console input mode");
+    let input = input_console()?;
+    let output = output_console()?;
+    let modes = ConsoleModes {
+        input: input.mode()?,
+        output: output.mode()?,
+    };
+    input.set_mode(modes.input | ENABLE_VIRTUAL_TERMINAL_INPUT)?;
+    if let Err(error) = output.set_mode(modes.output | ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+        if let Err(restore) = input.set_mode(modes.input) {
+            tracing::warn!(error = %restore, "failed to restore the console input mode");
         }
         return Err(error);
     }
-    Ok(ConsoleModes { input, output })
+    Ok(modes)
 }
 
 /// Put back the modes [`enable_virtual_terminal`] found.
 pub(crate) fn restore(modes: &ConsoleModes) -> io::Result<()> {
-    set_mode(STD_INPUT_HANDLE, modes.input)?;
-    set_mode(STD_OUTPUT_HANDLE, modes.output)
+    input_console()?.set_mode(modes.input)?;
+    output_console()?.set_mode(modes.output)
 }
 
-fn handle(which: STD_HANDLE) -> io::Result<HANDLE> {
-    // SAFETY: `GetStdHandle` takes no pointers and only reads the process's standard handles.
-    let handle = unsafe { GetStdHandle(which) };
-    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(handle)
+/// The console behind standard input.
+fn input_console() -> io::Result<ConsoleMode> {
+    Ok(ConsoleMode::from(Handle::input_handle()?))
 }
 
-fn mode(which: STD_HANDLE) -> io::Result<CONSOLE_MODE> {
-    let handle = handle(which)?;
-    let mut mode: CONSOLE_MODE = 0;
-    // SAFETY: `handle` is a standard handle of this process and `mode` is a valid, writable
-    // `CONSOLE_MODE` for the duration of the call.
-    if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(mode)
-}
-
-fn set_mode(which: STD_HANDLE, mode: CONSOLE_MODE) -> io::Result<()> {
-    let handle = handle(which)?;
-    // SAFETY: `handle` is a standard handle of this process; `SetConsoleMode` takes the mode
-    // by value.
-    if unsafe { SetConsoleMode(handle, mode) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+/// The console behind standard output.
+fn output_console() -> io::Result<ConsoleMode> {
+    Ok(ConsoleMode::from(Handle::output_handle()?))
 }

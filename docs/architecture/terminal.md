@@ -4,7 +4,7 @@ What the optional `terminal` feature adds, for programs that act as an `ssh` cli
 on the terminal while connecting (`TerminalPrompter`), and running a shell in the local
 terminal (`Session::interactive_shell`). The code is in `src/terminal/`. Without the feature
 Jato has no terminal dependency; with it, it adds `crossterm`, `rpassword` and, on Windows,
-`windows-sys`.
+`crossterm_winapi`, which crossterm already uses.
 
 ## Asking on the terminal
 
@@ -68,11 +68,12 @@ sequenceDiagram
     L->>L: stdout; on None, restore the terminal
 ```
 
-## Unsafe code
+## No unsafe code
 
-`windows.rs` is the only module in Jato with `unsafe`: `GetStdHandle`, `GetConsoleMode` and
-`SetConsoleMode`, each with a `SAFETY` comment. `lib.rs` denies `unsafe_code` and this module
-alone allows it; it is compiled only on Windows with the feature.
+`windows.rs` reads and sets the console modes through `crossterm_winapi` (`Handle::input_handle`,
+`Handle::output_handle`, `ConsoleMode::mode` and `set_mode`), the safe wrappers crossterm's own
+raw mode uses, so `lib.rs` can forbid `unsafe_code` with no exception. The two mode flags are
+constants in `windows.rs`.
 
 ## Testing
 

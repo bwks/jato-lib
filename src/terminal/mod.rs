@@ -5,5 +5,4 @@ pub(crate) mod escape;
 pub(crate) mod prompter;
 pub(crate) mod shell;
 #[cfg(windows)]
-#[allow(unsafe_code)]
 pub(crate) mod windows;

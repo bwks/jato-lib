@@ -11,7 +11,7 @@ categories = ["network-programming"]
 
 [features]
 # Use a terminal as `ssh` does: TerminalPrompter and Session::interactive_shell.
-terminal = ["dep:crossterm", "dep:rpassword", "dep:windows-sys", "tokio/signal", "tokio/sync"]
+terminal = ["dep:crossterm", "dep:crossterm_winapi", "dep:rpassword", "tokio/signal", "tokio/sync"]
 
 [dependencies]
 crossterm = { version = "0.29", default-features = false, features = ["windows"], optional = true }
@@ -26,4 +26,4 @@ tracing = "0.1"
 zeroize = "1"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"], optional = true }
+crossterm_winapi = { version = "0.9.1", optional = true }

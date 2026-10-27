@@ -99,7 +99,7 @@ src/
     shell.rs          ShellEnd; Session::interactive_shell
     console.rs        raw mode, size, TERM, resizes
     escape.rs         the ~. escape
-    windows.rs        Windows console VT modes (the only unsafe code)
+    windows.rs        Windows console VT modes
   device/             device CLIs over a shell
     cli.rs            Device, DeviceOptions
     profile.rs        DeviceProfile, ConfigMode, Mode; prompts from a discovered prompt
@@ -250,8 +250,8 @@ These come from `AGENTS.md` and shape every part:
   or put in errors, as they may hold a secret; errors name what was being done instead.
 - **Every network operation has a time limit.** Connecting and logging in have their own; each
   command, copy and prompt read takes one.
-- **No `unsafe` outside one module.** `lib.rs` denies `unsafe_code`; only
-  `terminal/windows.rs` (three Win32 console calls, `terminal` feature, Windows only) allows it.
+- **No `unsafe` code.** `lib.rs` forbids it. The Windows console modes of the `terminal`
+  feature go through `crossterm_winapi`'s safe wrappers.
 - **Typed errors.** One `thiserror` enum, never `anyhow`, never `unwrap` or `expect` outside
   tests.
 - **Nothing assumed about devices.** Prompts are discovered on the device, not built from its
