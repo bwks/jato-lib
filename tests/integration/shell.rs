@@ -2,8 +2,8 @@
 use std::time::Duration;
 
 use jato::{
-    Auth, ConnectOptions, Error, Hop, HostKeyPolicy, Node, Prompt, Secret, Session, Shell,
-    ShellOptions,
+    Auth, ConnectOptions, Error, Event, Exit, Hop, HostKeyPolicy, Node, Prompt, Secret, Session,
+    Shell, ShellOptions,
 };
 
 use crate::support::sshd::{PASSWORD, Sshd, USER};
@@ -133,4 +133,70 @@ async fn prompt_characters_in_a_command_do_not_end_it_early() {
         .await
         .unwrap();
     assert_eq!(output, "a $ b\nend");
+}
+
+/// Collect output until it contains `wanted`.
+async fn output_until(shell: &mut Shell, wanted: &str) -> String {
+    let mut output = String::new();
+    while !output.contains(wanted) {
+        match tokio::time::timeout(TIMEOUT, shell.next_event()).await {
+            Ok(Ok(Some(Event::Stdout(bytes) | Event::Stderr(bytes)))) => {
+                output.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            other => panic!("no {wanted:?} in {output:?}: {other:?}"),
+        }
+    }
+    output
+}
+
+async fn terminal(sshd: &Sshd) -> (Session, Shell) {
+    let hop = Hop::new(
+        Node::new("127.0.0.1", sshd.port),
+        Auth::new(USER).password(Secret::new(PASSWORD.into())),
+        HostKeyPolicy::strict(sshd.known_hosts()),
+    );
+    let session = Session::connect(&hop, &ConnectOptions::default())
+        .await
+        .unwrap();
+    let mut options = ShellOptions::default();
+    options.term = "xterm-256color".into();
+    options.columns = 100;
+    options.rows = 30;
+    let shell = session.shell(&options).await.unwrap();
+    (session, shell)
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_terminal_has_its_size_and_follows_resizes() {
+    let sshd = Sshd::start();
+    let (_session, mut shell) = terminal(&sshd).await;
+    shell
+        .send_bytes(b"stty size; echo \"t=$TERM\"\n")
+        .await
+        .unwrap();
+    let output = output_until(&mut shell, "t=xterm-256color").await;
+    assert!(output.contains("30 100"), "{output:?}");
+    shell.resize(120, 40).await.unwrap();
+    shell.send_bytes(b"stty size\n").await.unwrap();
+    output_until(&mut shell, "40 120").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn a_terminal_ends_with_the_shells_exit_status() {
+    let sshd = Sshd::start();
+    let (_session, mut shell) = terminal(&sshd).await;
+    shell.send_bytes(b"exit 3\n").await.unwrap();
+    let mut exit = None;
+    while let Some(event) = tokio::time::timeout(TIMEOUT, shell.next_event())
+        .await
+        .unwrap()
+        .unwrap()
+    {
+        if let Event::Exit(status) = event {
+            exit = Some(status);
+        }
+    }
+    assert_eq!(exit, Some(Exit::Code(3)));
 }

@@ -116,6 +116,12 @@ hashes count as the RSA key type. `Insecure` keeps `russh`'s default order.
 `AcceptNew` appends a plain `host key` line for an unknown server, creating the file and
 directory if needed. `Strict` never writes.
 
+To ask a person first, as OpenSSH's `StrictHostKeyChecking ask` does, connect with `Strict`.
+`Error::HostKeyUnknown` carries the fingerprint to show and the key itself. If the person
+accepts, `KnownHosts::record` appends that key, and a second `Strict` connection then accepts
+exactly that key and refuses any other. Nothing is asked inside the handshake, so Jato needs
+no callback or terminal.
+
 A policy checks a `KnownHosts` list of files, as OpenSSH checks `UserKnownHostsFile` and
 `GlobalKnownHostsFile`: the key is known if any file records it, a revocation in any file
 refuses it, otherwise a file recording other keys for the server makes it changed (the

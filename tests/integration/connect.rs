@@ -5,7 +5,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use crate::support::agent_proxy::AgentProxy;
 use crate::support::sshd::{PASSPHRASE, PASSWORD, Sshd, USER};
-use jato::{Auth, ConnectOptions, Error, Hop, HostKeyPolicy, Node, Secret, Session};
+use jato::{Auth, ConnectOptions, Error, Hop, HostKeyPolicy, KnownHosts, Node, Secret, Session};
 
 fn node(sshd: &Sshd) -> Node {
     Node::new("127.0.0.1", sshd.port)
@@ -156,6 +156,28 @@ async fn strict_refuses_an_unknown_server() {
         .err()
         .unwrap();
     assert!(matches!(error, Error::HostKeyUnknown { .. }), "{error}");
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_unknown_server_can_be_recorded_from_the_refusal() {
+    let sshd = Sshd::start();
+    let file = sshd.dir.join("prompted_known_hosts");
+    let auth = || Auth::new(USER).password(secret(PASSWORD));
+    let error = connect(&sshd, auth(), HostKeyPolicy::strict(file.clone()))
+        .await
+        .err()
+        .unwrap();
+    let Error::HostKeyUnknown { key, .. } = error else {
+        panic!("{error}");
+    };
+    KnownHosts::new(file.clone())
+        .record(&node(&sshd), &key)
+        .await
+        .unwrap();
+    connect(&sshd, auth(), HostKeyPolicy::strict(file))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

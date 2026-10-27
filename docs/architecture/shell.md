@@ -9,6 +9,33 @@ How `Session::shell` and `Shell` drive an interactive CLI.
 511 columns and 24 rows: `dumb` stops device CLIs redrawing lines, and the width stops them
 wrapping long ones. A PTY merges stderr into stdout, and the server echoes what is sent.
 
+## Passing a shell through to a terminal
+
+The same `Shell` can back a person's terminal instead of prompt matching, as an `ssh`
+client does. The caller sets `ShellOptions` to the local terminal's `TERM`, columns and rows,
+then:
+
+- `Shell::send_bytes` sends key presses unchanged, control characters included;
+- `Shell::resize` sends a `window-change` request when the local window changes size;
+- `Shell::next_event` returns output as it arrives, then the shell's `Exit`, then `None`
+  when the channel closes. Output that `read_until` had buffered and not returned comes first.
+
+The local terminal (raw mode, reading keys, watching for resizes) is the caller's: Jato has no
+terminal dependency.
+
+```mermaid
+sequenceDiagram
+    participant T as Local terminal (caller)
+    participant S as Shell
+    participant R as Server
+    T->>S: send_bytes(keys)
+    S->>R: channel data
+    R-->>S: output, exit-status, close
+    S-->>T: next_event: Stdout, Exit, None
+    T->>S: resize(columns, rows)
+    S->>R: window-change
+```
+
 ## Prompts
 
 A `Prompt` is a regular expression (the `regex` crate, which matches in linear time) anchored

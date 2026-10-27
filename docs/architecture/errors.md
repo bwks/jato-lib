@@ -64,7 +64,7 @@ graph LR
 | `Connect` | The TCP connection to the first hop fails |
 | `Tunnel` | A jump host cannot open a tunnel to the next hop (names both) |
 | `Timeout` | An operation runs past its limit; `operation` says which (`connect`, `authentication`, `command`, `scp upload`, `scp download`, `sftp start`, `sftp request`) |
-| `HostKeyUnknown`, `HostKeyChanged`, `HostKeyRevoked` | The host key check refuses the server; they give the key's fingerprint, and the `known_hosts` files checked (unknown) or the file and line that refused it (changed, revoked) |
+| `HostKeyUnknown`, `HostKeyChanged`, `HostKeyRevoked` | The host key check refuses the server; they give the key's fingerprint, and the `known_hosts` files checked and the key itself, which `KnownHosts::record` can record once confirmed (unknown) or the file and line that refused it (changed, revoked) |
 | `AuthFailed` | No credential is accepted; lists each attempt and why credentials were skipped |
 | `Protocol` | The SSH protocol fails, wrapping the `russh` error |
 | `ConnectionLost` | The connection went while a command ran, for example because keepalives went unanswered |

@@ -176,6 +176,46 @@ impl Shell {
             .map_err(|error| Error::protocol(self.node.clone(), error))
     }
 
+    /// Send `bytes` as typed, unchanged, as an interactive terminal does with each key
+    /// press. Nothing sent is logged.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Protocol`] if the channel has closed.
+    pub async fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        self.write
+            .data(bytes)
+            .await
+            .map_err(|error| Error::protocol(self.node.clone(), error))
+    }
+
+    /// Tell the server the terminal is now `columns` wide and `rows` high, as a terminal
+    /// does when its window is resized.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Protocol`] if the channel has closed.
+    pub async fn resize(&mut self, columns: u32, rows: u32) -> Result<(), Error> {
+        self.write
+            .window_change(columns, rows, 0, 0)
+            .await
+            .map_err(|error| Error::protocol(self.node.clone(), error))
+    }
+
+    /// The next output or the shell's exit status, as received, for passing a shell through
+    /// to a terminal. Output already read by [`Shell::read_until`] and not returned by it
+    /// comes first. `None` once the shell has closed.
+    ///
+    /// # Errors
+    ///
+    /// None yet; the result leaves room for errors as in [`Exec::next_event`](crate::Exec::next_event).
+    pub async fn next_event(&mut self) -> Result<Option<Event>, Error> {
+        if !self.received.is_empty() {
+            return Ok(Some(Event::Stdout(std::mem::take(&mut self.received))));
+        }
+        Ok(self.events.next().await)
+    }
+
     /// Send `line` followed by a newline, as if typed and Enter pressed.
     ///
     /// # Errors
