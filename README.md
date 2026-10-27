@@ -29,6 +29,8 @@ Jato is in early development; the plan for v1 is
   final mode and renamed into place, so a secret is never briefly readable by others;
   downloads, `mkdir -p`, renames and file attributes.
 - Copying single files with SCP, through the server's `scp` program.
+- Passing a shell through to a terminal, as an `ssh` client does: raw key presses, window
+  resizes and the exit status.
 - Interactive shells on a PTY: prompt discovery, prompt matching that waits for each
   command's echo, and cleaned command output.
 - Device CLIs through profiles for Cisco IOS and IOS XE, Cisco NX-OS, Arista EOS, Juniper Junos

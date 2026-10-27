@@ -84,6 +84,25 @@ impl KnownHosts {
     pub fn record_file(&self) -> &Path {
         &self.first
     }
+
+    /// Record `key`, in OpenSSH public key form, for `node` in the first file, creating the
+    /// file and its directory if needed. This is for a key the user has confirmed, such as
+    /// the one in [`Error::HostKeyUnknown`]; nothing is checked against the files first.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] if the key cannot be parsed or the file cannot be read or written.
+    #[tracing::instrument(skip(self, key), fields(%node), level = "debug")]
+    pub async fn record(&self, node: &Node, key: &str) -> Result<(), Error> {
+        let key = PublicKey::from_openssh(key).map_err(|error| Error::Io {
+            context: "parsing a host key to record".into(),
+            source: io::Error::other(error),
+        })?;
+        let current = read_known_hosts(&self.first).await?;
+        record(&self.first, &current, node, &key).await?;
+        tracing::info!(known_hosts = %self.first.display(), "recorded confirmed host key");
+        Ok(())
+    }
 }
 
 /// What a `known_hosts` file says about a server's key.
@@ -170,6 +189,7 @@ pub(crate) async fn check(
         HostKeyPolicy::Strict(_) | HostKeyPolicy::Insecure => Err(Error::HostKeyUnknown {
             node: node.clone(),
             fingerprint,
+            key: openssh_key(key)?,
             known_hosts: known_hosts.files().map(Path::to_path_buf).collect(),
         }),
     }
@@ -335,11 +355,15 @@ pub(crate) fn verdict(known_hosts: &str, host: &str, port: u16, key: &PublicKey)
 
 /// The `known_hosts` line recording `key` for the server at `host` and `port`.
 pub(crate) fn known_hosts_line(host: &str, port: u16, key: &PublicKey) -> Result<String, Error> {
-    let encoded = key.to_openssh().map_err(|error| Error::Io {
-        context: "encoding a host key for known_hosts".into(),
+    Ok(format!("{} {}", lookup_name(host, port), openssh_key(key)?))
+}
+
+/// `key` in OpenSSH public key form, as in `known_hosts` and `authorized_keys`.
+fn openssh_key(key: &PublicKey) -> Result<String, Error> {
+    key.to_openssh().map_err(|error| Error::Io {
+        context: "encoding a host key in OpenSSH form".into(),
         source: io::Error::other(error),
-    })?;
-    Ok(format!("{} {encoded}", lookup_name(host, port)))
+    })
 }
 
 /// The name a server is recorded under: the host on port 22, else `[host]:port`.

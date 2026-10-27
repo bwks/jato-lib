@@ -213,6 +213,10 @@ pub enum Error {
         node: Node,
         /// The key's SHA-256 fingerprint.
         fingerprint: String,
+        /// The key in OpenSSH public key form (`ssh-ed25519 AAAA...`). Once the fingerprint
+        /// is confirmed, [`KnownHosts::record`](crate::KnownHosts::record) records it, so the
+        /// next strict connection accepts exactly this key.
+        key: String,
         /// The `known_hosts` files checked.
         known_hosts: Vec<PathBuf>,
     },
