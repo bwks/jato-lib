@@ -267,12 +267,53 @@ async fn open_hop(
     hop: &Hop,
     options: &ConnectOptions,
 ) -> Result<Handle<Client>, Error> {
-    let handshake = handshake(via, hop, options);
-    let mut handle = within(options.connect_timeout, "connect", &hop.node, handshake).await?;
+    let first = within(
+        options.connect_timeout,
+        "connect",
+        &hop.node,
+        handshake(via, hop, options),
+    )
+    .await;
+    let mut handle = match first {
+        Err(refusal @ Error::HostKeyUnknown { .. }) => {
+            ask_about_host_key(hop, refusal).await?;
+            let again = handshake(via, hop, options);
+            within(options.connect_timeout, "connect", &hop.node, again).await?
+        }
+        other => other?,
+    };
     let login = auth::authenticate(&mut handle, &hop.auth, &hop.node, hop.legacy_algorithms);
     within(options.auth_timeout, "authentication", &hop.node, login).await?;
     tracing::debug!(node = %hop.node, "logged in");
     Ok(handle)
+}
+
+/// With [`HostKeyPolicy::Ask`] and a prompter, ask whether to trust the unknown host key in
+/// `refusal` and record it if confirmed, so the handshake can be run again. Asking happens
+/// between handshakes, so the connect time limit does not cut the person off. Otherwise, or
+/// if declined, the refusal is returned.
+async fn ask_about_host_key(hop: &Hop, refusal: Error) -> Result<(), Error> {
+    let (HostKeyPolicy::Ask(known_hosts), Some(prompter)) =
+        (&hop.host_key, hop.auth.prompter_handle())
+    else {
+        return Err(refusal);
+    };
+    let Error::HostKeyUnknown {
+        node,
+        fingerprint,
+        key,
+        ..
+    } = &refusal
+    else {
+        return Err(refusal);
+    };
+    if !auth::confirm_host_key(prompter, node, fingerprint).await {
+        tracing::info!(%node, %fingerprint, "unknown host key declined");
+        return Err(refusal);
+    }
+    known_hosts.record(node, key).await?;
+    auth::host_key_recorded(prompter, node, known_hosts.record_file()).await;
+    Ok(())
 }
 
 /// Reach `hop`, over TCP or through a tunnel from the jump host `via`, run the SSH handshake

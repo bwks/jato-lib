@@ -33,8 +33,9 @@ impl HostConfig {
     }
 
     /// How to check the host key: `StrictHostKeyChecking no` is
-    /// [`HostKeyPolicy::Insecure`], `accept-new` is [`HostKeyPolicy::AcceptNew`], and `yes` or
-    /// `ask` (the default) is [`HostKeyPolicy::Strict`]. The `known_hosts` files are the
+    /// [`HostKeyPolicy::Insecure`], `accept-new` is [`HostKeyPolicy::AcceptNew`], `yes` is
+    /// [`HostKeyPolicy::Strict`], and `ask` (the default) is [`HostKeyPolicy::Ask`], which
+    /// refuses an unknown server as `yes` does unless the hop has a prompter to ask. The `known_hosts` files are the
     /// user's then the global ones, and new keys are recorded in the first user file. With no
     /// files at all, nothing is known and `/dev/null` takes any recording.
     pub fn host_key_policy(&self) -> HostKeyPolicy {
@@ -50,9 +51,8 @@ impl HostConfig {
         match self.strict_host_key_checking {
             StrictHostKeyChecking::No => HostKeyPolicy::Insecure,
             StrictHostKeyChecking::AcceptNew => HostKeyPolicy::AcceptNew(known_hosts),
-            StrictHostKeyChecking::Yes | StrictHostKeyChecking::Ask => {
-                HostKeyPolicy::Strict(known_hosts)
-            }
+            StrictHostKeyChecking::Yes => HostKeyPolicy::Strict(known_hosts),
+            StrictHostKeyChecking::Ask => HostKeyPolicy::Ask(known_hosts),
         }
     }
 
@@ -197,7 +197,7 @@ mod tests {
         let all = KnownHosts::new("/home/me/.ssh/known_hosts")
             .also("/home/me/.ssh/known_hosts2")
             .also("/etc/ssh/ssh_known_hosts");
-        assert_eq!(config.host_key_policy(), HostKeyPolicy::Strict(all.clone()));
+        assert_eq!(config.host_key_policy(), HostKeyPolicy::Ask(all.clone()));
         config.strict_host_key_checking = StrictHostKeyChecking::Yes;
         assert_eq!(config.host_key_policy(), HostKeyPolicy::Strict(all.clone()));
         config.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;

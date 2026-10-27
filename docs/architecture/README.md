@@ -14,6 +14,7 @@ its document here, or add one and list it below.
 | [sftp.md](sftp.md) | File transfer with Jato's own SFTP client, and safe uploads |
 | [ssh_config.md](ssh_config.md) | Reading OpenSSH client configuration into hops and routes |
 | [shell.md](shell.md) | Interactive shells on a PTY, prompt matching and discovery |
+| [terminal.md](terminal.md) | The `terminal` feature: asking on the terminal, and `ssh host` in the local terminal |
 | [device.md](device.md) | Device CLIs: profiles, modes, enable, configuration |
 | [errors.md](errors.md) | The error type and what errors may and may not contain |
 | [secrets.md](secrets.md) | How passwords, keys and passphrases are held |
@@ -75,6 +76,7 @@ src/
     connect.rs        Session, Hop, ConnectOptions; jump chains
     auth.rs           Auth; attempt order; logging in
     host_key.rs       HostKeyPolicy; known_hosts
+    prompt_cache.rs   PromptCache: answers kept across connections
     algorithms.rs     algorithm lists, legacy by opt-in
     channel.rs        channel messages to stdout/stderr/exit events
     exec.rs           Exec, Event, Exit, Output; commands
@@ -92,6 +94,12 @@ src/
     resolve.rs        HostConfig under OpenSSH's rules; ProxyJump
     hop.rs            HostConfig into Node, Auth, HostKeyPolicy, Hop
     config.rs         SshConfig, Route
+  terminal/           the `terminal` feature
+    prompter.rs       TerminalPrompter
+    shell.rs          ShellEnd; Session::interactive_shell
+    console.rs        raw mode, size, TERM, resizes
+    escape.rs         the ~. escape
+    windows.rs        Windows console VT modes
   device/             device CLIs over a shell
     cli.rs            Device, DeviceOptions
     profile.rs        DeviceProfile, ConfigMode, Mode; prompts from a discovered prompt
@@ -107,6 +115,7 @@ src/
 | `shared::glob` | (none) | Host patterns with `*`, `?` and `!`, for `known_hosts` and `ssh_config` |
 | `ssh::auth` | `Auth` | Credentials, the order they are tried, and logging in through `russh` |
 | `ssh::host_key` | `HostKeyPolicy` | `known_hosts` matching, the policies, recording new keys |
+| `ssh::prompt_cache` | `PromptCache` | Answers to a prompter kept across connections |
 | `ssh::algorithms` | (none) | The algorithm lists offered in the handshake, with legacy ones by opt-in |
 | `ssh::connect` | `Session`, `Hop`, `ConnectOptions` | Direct connections and jump chains |
 | `ssh::channel` | (none) | Channel messages as events; waiting for a request's reply |
@@ -116,6 +125,7 @@ src/
 | `sftp` | `Sftp`, `Metadata` | File transfer over the `sftp` subsystem; uploads through a temporary file and a rename |
 | `ssh_config` | `SshConfig`, `Route`, `HostConfig`, `JumpHost`, `StrictHostKeyChecking` | OpenSSH client configuration into hops and routes |
 | `device` | `Device`, `DeviceOptions`, `DeviceProfile`, `ConfigMode`, `Mode` | Device CLIs driven through a shell |
+| `terminal` | `TerminalPrompter`, `ShellEnd` (and `Session::interactive_shell`) | The `terminal` feature: OpenSSH's questions on the terminal, and a shell in the local terminal |
 
 How the modules depend on each other (an arrow means "uses"):
 
@@ -240,6 +250,8 @@ These come from `AGENTS.md` and shape every part:
   or put in errors, as they may hold a secret; errors name what was being done instead.
 - **Every network operation has a time limit.** Connecting and logging in have their own; each
   command, copy and prompt read takes one.
+- **No `unsafe` code.** `lib.rs` forbids it. The Windows console modes of the `terminal`
+  feature go through `crossterm_winapi`'s safe wrappers.
 - **Typed errors.** One `thiserror` enum, never `anyhow`, never `unwrap` or `expect` outside
   tests.
 - **Nothing assumed about devices.** Prompts are discovered on the device, not built from its

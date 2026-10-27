@@ -3,6 +3,7 @@
 //! Each target is on a private Docker network and is reached by its container name, which
 //! resolves only inside that network, so a login proves the connection went through the
 //! jump hosts.
+use crate::support::prompter::ScriptedPrompter;
 use crate::support::sshd::{Network, PASSWORD, Sshd, USER};
 use jato::{Auth, ConnectOptions, Error, Hop, HostKeyPolicy, Node, Secret, Session};
 
@@ -123,4 +124,24 @@ async fn an_unreachable_next_hop_names_both_ends() {
     };
     assert_eq!(via, &Node::new("127.0.0.1", jump.port));
     assert_eq!(node, &Node::new("jato-no-such-host", 22));
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_unknown_jump_host_is_asked_about() {
+    let network = Network::create();
+    let jump = Sshd::start_in(&network);
+    let target = Sshd::start_in(&network);
+    let file = jump.dir.join("ask_known_hosts");
+    let prompter = ScriptedPrompter::new(&[Some("yes")]);
+    let entry = Hop::new(
+        Node::new("127.0.0.1", jump.port),
+        password().prompter(prompter.clone()),
+        HostKeyPolicy::ask(&file),
+    );
+    let session = Session::connect_via(&[entry], &inner_hop(&target), &ConnectOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(session.node(), &Node::new(target.name.clone(), 22));
+    assert_eq!(prompter.asked().len(), 2);
 }

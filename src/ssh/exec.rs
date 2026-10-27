@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::fmt;
 use std::time::Duration;
 
 use russh::ChannelWriteHalf;
@@ -62,6 +63,18 @@ pub struct Exec {
     node: Node,
     events: Events,
     write: ChannelWriteHalf<Msg>,
+}
+
+/// How the command ended, in words: `exit status 2`, `terminated by signal TERM`, or `ended
+/// without an exit status`.
+impl fmt::Display for Exit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Exit::Code(code) => write!(f, "exit status {code}"),
+            Exit::Signal { name, .. } => write!(f, "terminated by signal {name}"),
+            Exit::Unknown => f.write_str("ended without an exit status"),
+        }
+    }
 }
 
 impl Output {
@@ -224,6 +237,18 @@ async fn feed(write: &ChannelWriteHalf<Msg>, stdin: &[u8]) -> Result<(), russh::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exits_are_described_as_ssh_reports_them() {
+        assert_eq!(Exit::Code(2).to_string(), "exit status 2");
+        let signal = Exit::Signal {
+            name: "TERM".into(),
+            core_dumped: false,
+            message: String::new(),
+        };
+        assert_eq!(signal.to_string(), "terminated by signal TERM");
+        assert_eq!(Exit::Unknown.to_string(), "ended without an exit status");
+    }
 
     #[test]
     fn success_means_exit_code_zero() {
