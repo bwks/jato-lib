@@ -20,9 +20,10 @@ Jato is in early development; the plan for v1 is
   Windows the OpenSSH agent's pipe or Pageant), key files (encrypted
   ones with a passphrase), the default identities in `~/.ssh`, private keys held in memory,
   and passwords (keyboard-interactive first, then plain password).
-- Asking a person for a key passphrase or a password while logging in, through a `Prompter`
-  you implement, as `ssh` asks on its terminal; nothing is asked without one.
-- Host key checking per connection: `Strict` and `AcceptNew` against one or more
+- Asking a person for a key passphrase or a password while logging in, and whether to trust
+  an unknown server, through a `Prompter`, as `ssh` asks on its terminal; nothing is asked
+  without one. `PromptCache` keeps answers so many connections ask once.
+- Host key checking per connection: `Strict`, `Ask` and `AcceptNew` against one or more
   `known_hosts` files (plain, hashed, wildcard and negated entries, `@revoked` markers), such
   as a lab's own file beside `~/.ssh/known_hosts`, or `Insecure` by choice.
 - Running commands without a terminal: stdin, separate stdout and stderr, and the exit
@@ -33,6 +34,9 @@ Jato is in early development; the plan for v1 is
 - Copying single files with SCP, through the server's `scp` program.
 - Passing a shell through to a terminal, as an `ssh` client does: raw key presses, window
   resizes and the exit status.
+- With the `terminal` feature: `TerminalPrompter`, which asks OpenSSH's questions on the
+  terminal, and `Session::interactive_shell`, which runs `ssh host` in the local terminal
+  (raw mode, resizes, `~.`, Windows consoles included).
 - Interactive shells on a PTY: prompt discovery, prompt matching that waits for each
   command's echo, and cleaned command output.
 - Device CLIs through profiles for Cisco IOS and IOS XE, Cisco NX-OS, Arista EOS, Juniper Junos
@@ -79,9 +83,27 @@ async fn from_config() -> Result<(), jato::Error> {
 }
 ```
 
+As an `ssh` client, with the `terminal` feature
+(`jato = { git = "https://github.com/bwks/jato-lib", tag = "v0.4.0", features = ["terminal"] }`):
+asking on the terminal about an unknown server and for passphrases, then a shell.
+
+```rust,ignore
+use std::sync::Arc;
+use jato::{ConnectOptions, SshConfig, TerminalPrompter};
+
+async fn ssh(host: &str) -> Result<i32, jato::Error> {
+    let route = SshConfig::load()?.route(host)?;
+    let session = route
+        .connect_with_prompter(&ConnectOptions::default(), Arc::new(TerminalPrompter::new()))
+        .await?;
+    let ended = session.interactive_shell().await?;
+    Ok(ended.exit_code())
+}
+```
+
 ## Tests
 
-Unit tests run with `cargo test`. Integration tests start a disposable OpenSSH server in
+Unit tests run with `cargo test --all-features`. Integration tests start a disposable OpenSSH server in
 Docker and also need `ssh-keygen` and `ssh-agent`:
 
 ```sh

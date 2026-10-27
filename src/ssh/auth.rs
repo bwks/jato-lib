@@ -25,18 +25,36 @@ const MAX_KEYBOARD_INTERACTIVE_ROUNDS: usize = 5;
 /// as OpenSSH's `NumberOfPasswordPrompts`.
 const PROMPT_TRIES: usize = 3;
 
-/// Asks a person for a secret while logging in, as OpenSSH asks on its terminal.
+/// Asks a person while connecting, as OpenSSH asks on its terminal.
 ///
 /// Jato asks for a passphrase when an encrypted key file has none, and for a password when no
 /// other credential logged in and the server accepts passwords. Each is asked up to three
-/// times; returning `None` stops asking. The methods are called on a blocking thread, so they
-/// may read a terminal. Without a prompter nothing is asked, which suits automation.
+/// times; returning `None` stops asking. With [`HostKeyPolicy::Ask`](crate::HostKeyPolicy::Ask)
+/// it also asks whether to trust an unknown server's host key. The methods are called on a
+/// blocking thread, so they may read a terminal. Without a prompter nothing is asked, which
+/// suits automation.
 pub trait Prompter: Send + Sync + fmt::Debug {
     /// The passphrase for the encrypted private key file at `path`, or `None` to skip the key.
     fn passphrase(&self, path: &Path) -> Option<Secret>;
 
     /// The password for `username` on `node`, or `None` to stop asking.
     fn password(&self, node: &Node, username: &str) -> Option<Secret>;
+
+    /// Whether to trust `node`, whose host key with the SHA-256 `fingerprint` is not recorded
+    /// in any `known_hosts` file. Only check the fingerprint against one obtained another
+    /// way; trusting a key unseen lets whoever intercepts the connection impersonate the
+    /// server. The default refuses, so a prompter that does not ask about host keys keeps
+    /// unknown servers out.
+    fn confirm_host_key(&self, node: &Node, fingerprint: &str) -> bool {
+        tracing::debug!(%node, %fingerprint, "prompter does not ask about host keys; refused");
+        false
+    }
+
+    /// `node`'s host key, confirmed with [`Prompter::confirm_host_key`], was recorded in
+    /// `known_hosts`. OpenSSH warns about this on its terminal. The default does nothing.
+    fn host_key_recorded(&self, node: &Node, known_hosts: &Path) {
+        tracing::debug!(%node, known_hosts = %known_hosts.display(), "host key recorded");
+    }
 }
 
 /// How to authenticate as one user on one server.
@@ -172,6 +190,11 @@ impl Auth {
     pub fn prompter(mut self, prompter: Arc<dyn Prompter>) -> Self {
         self.prompter = Some(prompter);
         self
+    }
+
+    /// The prompter given with [`Auth::prompter`], if any.
+    pub(crate) fn prompter_handle(&self) -> Option<&Arc<dyn Prompter>> {
+        self.prompter.as_ref()
     }
 
     /// The attempts to make, in order. `default_identities` are the default identity files
@@ -389,6 +412,41 @@ async fn ask_password(prompter: &Arc<dyn Prompter>, node: &Node, username: &str)
             tracing::warn!(%error, "the password prompt failed");
             None
         }
+    }
+}
+
+/// Ask `prompter` whether to trust `node`'s unknown host key, on a blocking thread. A failed
+/// prompt refuses.
+pub(crate) async fn confirm_host_key(
+    prompter: &Arc<dyn Prompter>,
+    node: &Node,
+    fingerprint: &str,
+) -> bool {
+    let prompter = Arc::clone(prompter);
+    let node = node.clone();
+    let fingerprint = fingerprint.to_string();
+    match task::spawn_blocking(move || prompter.confirm_host_key(&node, &fingerprint)).await {
+        Ok(confirmed) => confirmed,
+        Err(error) => {
+            tracing::warn!(%error, "the host key prompt failed");
+            false
+        }
+    }
+}
+
+/// Tell `prompter` that `node`'s host key was recorded in `known_hosts`, on a blocking thread.
+pub(crate) async fn host_key_recorded(
+    prompter: &Arc<dyn Prompter>,
+    node: &Node,
+    known_hosts: &Path,
+) {
+    let prompter = Arc::clone(prompter);
+    let node = node.clone();
+    let known_hosts = known_hosts.to_path_buf();
+    if let Err(error) =
+        task::spawn_blocking(move || prompter.host_key_recorded(&node, &known_hosts)).await
+    {
+        tracing::warn!(%error, "the host key notice failed");
     }
 }
 

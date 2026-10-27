@@ -116,17 +116,37 @@ hashes count as the RSA key type. `Insecure` keeps `russh`'s default order.
 `AcceptNew` appends a plain `host key` line for an unknown server, creating the file and
 directory if needed. `Strict` never writes.
 
-To ask a person first, as OpenSSH's `StrictHostKeyChecking ask` does, connect with `Strict`.
-`Error::HostKeyUnknown` carries the fingerprint to show and the key itself. If the person
-accepts, `KnownHosts::record` appends that key, and a second `Strict` connection then accepts
-exactly that key and refuses any other. Nothing is asked inside the handshake, so Jato needs
-no callback or terminal.
+`Ask` asks a person first, as OpenSSH's `StrictHostKeyChecking ask` does. In the handshake it
+checks as `Strict` does and refuses an unknown server with `Error::HostKeyUnknown`, which
+carries the fingerprint and the key. `open_hop` then asks the hop's `Prompter`
+(`confirm_host_key(node, fingerprint)`, on a blocking thread). If it confirms, the key is
+recorded with `KnownHosts::record`, the prompter is told (`host_key_recorded`), and the
+handshake runs again, accepting exactly that key and no other. Only that hop is redone; jump
+hosts already open stay open. Nothing is asked inside the handshake, so the connect time limit
+does not cut the person off. Without a prompter, or if it declines, the refusal is returned,
+so `Ask` with no prompter is `Strict`. A changed or revoked key is never asked about.
+
+```text
+handshake (checks as Strict)
+  |
+  +- ok ---------------------------------------------> log in
+  +- HostKeyUnknown, policy Ask, hop has a prompter
+  |    confirm_host_key(node, fingerprint)
+  |      no  --> HostKeyUnknown
+  |      yes --> KnownHosts::record, host_key_recorded
+  |              handshake again (a different key now is HostKeyChanged)
+  +- any other refusal or error ---------------------> error
+```
+
+A caller can also do this itself with `Strict`: show the fingerprint from
+`Error::HostKeyUnknown`, `KnownHosts::record` the key, and connect again.
 
 A policy checks a `KnownHosts` list of files, as OpenSSH checks `UserKnownHostsFile` and
 `GlobalKnownHostsFile`: the key is known if any file records it, a revocation in any file
 refuses it, otherwise a file recording other keys for the server makes it changed (the
 error names that file and line), and `AcceptNew` records into the first file. Missing files
-count as empty. `HostKeyPolicy::strict(file)` and `accept_new(file)` are the one-file case.
+count as empty. `HostKeyPolicy::strict(file)`, `ask(file)` and `accept_new(file)` are the
+one-file case.
 The recorded key types offered first in the handshake are gathered from all the files.
 
 ```mermaid
@@ -138,7 +158,7 @@ flowchart TD
     entries -->|some| match{"Any entry with<br/>this key?"}
     match -->|yes| Known[Accepted]
     match -->|no| Changed[HostKeyChanged]
-    unknown -->|Strict| Unknown[HostKeyUnknown]
+    unknown -->|Strict, Ask| Unknown[HostKeyUnknown]
     unknown -->|AcceptNew| Record[Record it, accept]
 ```
 
@@ -197,6 +217,19 @@ one nothing is asked, which suits automation. With one:
   answer is tried with keyboard-interactive if the server accepts it, else as a password.
 - Returning `None` stops asking. The prompter is called on a blocking thread
   (`spawn_blocking`), so it may read a terminal.
+- With `HostKeyPolicy::Ask`, an unknown host key asks `Prompter::confirm_host_key` (see Host
+  keys). Its default refuses, so a prompter written only for secrets keeps unknown servers
+  out.
+
+`PromptCache` (`ssh/prompt_cache.rs`) wraps a prompter for programs that open many
+connections, such as provisioning many hosts through one jump host. Each connection attempt
+gets `cache.prompter(inner)`. A question's first asking in that connection is answered from
+the cache if it holds an answer; otherwise, and when the same question comes again in the
+same connection (the cached answer was wrong), it goes to `inner`, and the answer is kept.
+Declined questions are not kept, and host key questions always go to `inner`.
+
+`TerminalPrompter`, with the `terminal` feature, asks OpenSSH's questions on the terminal; see
+[terminal.md](terminal.md).
 
 ```mermaid
 flowchart TD

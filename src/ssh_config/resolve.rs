@@ -72,7 +72,8 @@ pub enum StrictHostKeyChecking {
     AcceptNew,
     /// `no` or `off`: accept any key.
     No,
-    /// `ask`, the default, which Jato treats as `yes` as it cannot ask.
+    /// `ask`, the default: ask the hop's prompter about an unknown key, or refuse it as `yes`
+    /// does when there is none.
     Ask,
 }
 

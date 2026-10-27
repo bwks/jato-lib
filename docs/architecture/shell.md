@@ -20,8 +20,9 @@ then:
 - `Shell::next_event` returns output as it arrives, then the shell's `Exit`, then `None`
   when the channel closes. Output that `read_until` had buffered and not returned comes first.
 
-The local terminal (raw mode, reading keys, watching for resizes) is the caller's: Jato has no
-terminal dependency.
+The local terminal (raw mode, reading keys, watching for resizes) is the caller's, or, with
+the `terminal` feature, `Session::interactive_shell` does all of it (see
+[terminal.md](terminal.md)). Without that feature Jato has no terminal dependency.
 
 ```mermaid
 sequenceDiagram

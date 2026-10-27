@@ -84,7 +84,8 @@ The rules, as in OpenSSH:
 | `IdentityFile` | those key files; without any, the default identities |
 | `IdentitiesOnly yes` | the key files only, no agent |
 | `UserKnownHostsFile`, `GlobalKnownHostsFile` | `KnownHosts`: the user's files, then the global ones; `none` lists none |
-| `StrictHostKeyChecking yes`, `ask` (default) | `HostKeyPolicy::Strict` with those files |
+| `StrictHostKeyChecking yes` | `HostKeyPolicy::Strict` with those files |
+| `StrictHostKeyChecking ask` (default) | `HostKeyPolicy::Ask` with those files: the hop's prompter is asked about an unknown key, and without one it is refused as with `yes` |
 | `StrictHostKeyChecking accept-new` | `HostKeyPolicy::AcceptNew` with those files, recording in the first user file |
 | `StrictHostKeyChecking no` / `off` | `HostKeyPolicy::Insecure` |
 | An algorithm list that adds or lists a legacy algorithm (`+ssh-rsa`, `+diffie-hellman-group14-sha1` and the like) | `Hop::allow_legacy_algorithms` |

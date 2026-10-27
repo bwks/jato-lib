@@ -30,6 +30,12 @@ pub enum HostKeyPolicy {
     /// seen, its key is recorded in the first file and accepted, as with OpenSSH's
     /// `StrictHostKeyChecking accept-new`.
     AcceptNew(KnownHosts),
+    /// Accept a key recorded in one of these `known_hosts` files. The first time a server is
+    /// seen, the hop's [`Prompter`](crate::Prompter) is asked to confirm its fingerprint; a
+    /// confirmed key is recorded in the first file and the handshake is run again, accepting
+    /// exactly that key. As with OpenSSH's `StrictHostKeyChecking ask`. Without a prompter,
+    /// or if the prompter declines, the server is refused as with [`HostKeyPolicy::Strict`].
+    Ask(KnownHosts),
     /// Accept any key without checking it. Use this only where the network path is already
     /// trusted, such as a hop inside a verified tunnel.
     Insecure,
@@ -57,6 +63,11 @@ impl HostKeyPolicy {
     /// [`HostKeyPolicy::AcceptNew`] with one `known_hosts` file.
     pub fn accept_new(file: impl Into<PathBuf>) -> Self {
         Self::AcceptNew(KnownHosts::new(file))
+    }
+
+    /// [`HostKeyPolicy::Ask`] with one `known_hosts` file.
+    pub fn ask(file: impl Into<PathBuf>) -> Self {
+        Self::Ask(KnownHosts::new(file))
     }
 }
 
@@ -132,7 +143,9 @@ pub(crate) async fn check(
     key: &PublicKey,
 ) -> Result<(), Error> {
     let known_hosts = match policy {
-        HostKeyPolicy::Strict(known_hosts) | HostKeyPolicy::AcceptNew(known_hosts) => known_hosts,
+        HostKeyPolicy::Strict(known_hosts)
+        | HostKeyPolicy::AcceptNew(known_hosts)
+        | HostKeyPolicy::Ask(known_hosts) => known_hosts,
         HostKeyPolicy::Insecure => {
             tracing::debug!("host key accepted without checking, as the policy is insecure");
             return Ok(());
@@ -186,12 +199,14 @@ pub(crate) async fn check(
             tracing::info!(%fingerprint, known_hosts = %file.display(), "recorded new host key");
             Ok(())
         }
-        HostKeyPolicy::Strict(_) | HostKeyPolicy::Insecure => Err(Error::HostKeyUnknown {
-            node: node.clone(),
-            fingerprint,
-            key: openssh_key(key)?,
-            known_hosts: known_hosts.files().map(Path::to_path_buf).collect(),
-        }),
+        HostKeyPolicy::Strict(_) | HostKeyPolicy::Ask(_) | HostKeyPolicy::Insecure => {
+            Err(Error::HostKeyUnknown {
+                node: node.clone(),
+                fingerprint,
+                key: openssh_key(key)?,
+                known_hosts: known_hosts.files().map(Path::to_path_buf).collect(),
+            })
+        }
     }
 }
 
@@ -254,7 +269,9 @@ pub(crate) async fn preferred_algorithms(
     default: &[Algorithm],
 ) -> Result<Vec<Algorithm>, Error> {
     let known_hosts = match policy {
-        HostKeyPolicy::Strict(known_hosts) | HostKeyPolicy::AcceptNew(known_hosts) => known_hosts,
+        HostKeyPolicy::Strict(known_hosts)
+        | HostKeyPolicy::AcceptNew(known_hosts)
+        | HostKeyPolicy::Ask(known_hosts) => known_hosts,
         HostKeyPolicy::Insecure => return Ok(default.to_vec()),
     };
     let mut recorded = Vec::new();
@@ -644,6 +661,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ask_checks_as_strict_does_and_records_nothing_itself() {
+        let path = temp_known_hosts("ask", &format!("switch01 {KEY_A}\n"));
+        let policy = HostKeyPolicy::ask(path.clone());
+        let node = Node::new("switch01", 22);
+        check(&policy, &node, &key(KEY_A)).await.unwrap();
+        let changed = check(&policy, &node, &key(KEY_B)).await.unwrap_err();
+        assert!(matches!(changed, Error::HostKeyChanged { line: 1, .. }));
+        let unknown = check(&policy, &Node::new("switch02", 22), &key(KEY_A))
+            .await
+            .unwrap_err();
+        assert!(matches!(unknown, Error::HostKeyUnknown { .. }));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("switch01 {KEY_A}\n")
+        );
+    }
+
+    #[tokio::test]
     async fn strict_without_a_file_refuses_every_key() {
         let path = std::env::temp_dir()
             .join("jato-host-key-missing")
@@ -798,6 +833,10 @@ mod tests {
         assert_eq!(
             HostKeyPolicy::accept_new(&path),
             HostKeyPolicy::AcceptNew(KnownHosts::new(&path))
+        );
+        assert_eq!(
+            HostKeyPolicy::ask(&path),
+            HostKeyPolicy::Ask(KnownHosts::new(&path))
         );
         let files: Vec<_> = KnownHosts::new("/a")
             .also("/b")
