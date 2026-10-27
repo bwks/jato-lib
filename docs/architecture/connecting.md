@@ -183,6 +183,34 @@ flowchart LR
   that exist, in that order.
 - A key file is tried once, even if it is listed twice.
 
+### Asking for secrets
+
+An `Auth` (or a hop, or a whole `Route` with `Route::connect_with_prompter`) can carry a
+`Prompter`, which a caller implements to ask a person, as `ssh` asks on its terminal. Without
+one nothing is asked, which suits automation. With one:
+
+- An encrypted key file given without a passphrase (`key_file(path, None)`, or a default
+  identity) asks `Prompter::passphrase(path)`. A wrong passphrase is asked again, up to three
+  times, as OpenSSH's `NumberOfPasswordPrompts`.
+- When every credential has failed and the server still accepts keyboard-interactive or
+  password login, `Prompter::password(node, username)` is asked, up to three times. Each
+  answer is tried with keyboard-interactive if the server accepts it, else as a password.
+- Returning `None` stops asking. The prompter is called on a blocking thread
+  (`spawn_blocking`), so it may read a terminal.
+
+```mermaid
+flowchart TD
+    attempts[Credentials, in order] --> enc{"Encrypted key,<br/>no passphrase?"}
+    enc -->|yes, prompter| ask1["passphrase(path)<br/>up to 3 tries"] --> key[Try the key]
+    enc -->|no| key
+    key --> next{Accepted?}
+    next -->|yes| done[Logged in]
+    next -->|no, more credentials| attempts
+    next -->|no, none left| pw{"Prompter, and server<br/>takes passwords?"}
+    pw -->|yes| ask2["password(node, user)<br/>up to 3 tries"] --> done
+    pw -->|no| fail[AuthFailed]
+```
+
 After a refusal, the server lists the methods it still accepts, and later attempts using
 other methods are skipped. A credential that cannot be used (a key file that is missing or
 cannot be decrypted, no agent running) is skipped. Every attempt, and every skip with its

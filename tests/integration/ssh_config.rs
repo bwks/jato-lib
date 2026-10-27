@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use jato::{ConnectOptions, HostConfig, SshConfig, StrictHostKeyChecking};
 
-use crate::support::sshd::{Network, Sshd};
+use crate::support::prompter::{Asked, ScriptedPrompter};
+use crate::support::sshd::{Network, PASSPHRASE, Sshd};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -333,6 +334,54 @@ Host 127.0.0.1
         assert_eq!(output.stdout, b"through the server\n");
         session.close().await.unwrap();
     }
+}
+
+#[tokio::test]
+#[ignore]
+async fn an_encrypted_jump_host_key_asks_for_its_passphrase() {
+    let network = Network::create();
+    let server = Sshd::start_in(&network);
+    let node = Sshd::start_in(&network);
+    let dir = temp_dir("sherpa-passphrase");
+    fs::write(
+        dir.join("config"),
+        format!(
+            "{lab}
+Host 127.0.0.1
+    IdentityFile {key}
+    IdentitiesOnly yes
+    StrictHostKeyChecking yes
+    UserKnownHostsFile {known_hosts}
+",
+            lab = sherpa_lab_block(
+                "node1.lab1",
+                &node.name,
+                22,
+                "jato",
+                &format!("jato@127.0.0.1:{}", server.port),
+                &node.dir.join("id_plain"),
+            ),
+            key = server.dir.join("id_encrypted").display(),
+            known_hosts = server.known_hosts().display(),
+        ),
+    )
+    .unwrap();
+    let route = SshConfig::load_file(dir.join("config"))
+        .unwrap()
+        .route("node1.lab1")
+        .unwrap();
+    let options = ConnectOptions::default();
+    assert!(route.connect(&options).await.is_err());
+    let prompter = ScriptedPrompter::new(&[Some(PASSPHRASE)]);
+    let session = route
+        .connect_with_prompter(&options, prompter.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        prompter.asked(),
+        vec![Asked::Passphrase(server.dir.join("id_encrypted"))]
+    );
+    session.close().await.unwrap();
 }
 
 #[tokio::test]

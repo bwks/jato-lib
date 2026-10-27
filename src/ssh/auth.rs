@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -5,8 +6,11 @@ use russh::MethodKind;
 use russh::MethodSet;
 use russh::client::{AuthResult, Handle, Handler, KeyboardInteractiveAuthResponse, Prompt};
 use russh::keys::agent::AgentIdentity;
-use russh::keys::{Algorithm, HashAlg, PrivateKeyWithHashAlg, decode_secret_key};
+use russh::keys::{
+    Algorithm, Error as KeyError, HashAlg, PrivateKey, PrivateKeyWithHashAlg, decode_secret_key,
+};
 use tokio::fs;
+use tokio::task;
 
 use crate::shared::error::Error;
 use crate::shared::node::Node;
@@ -17,6 +21,23 @@ use crate::ssh::agent::{OpenAgent, open_agent};
 pub(crate) const DEFAULT_IDENTITY_FILES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
 /// The most keyboard-interactive prompt rounds answered before giving up on the method.
 const MAX_KEYBOARD_INTERACTIVE_ROUNDS: usize = 5;
+/// How many times a [`Prompter`] is asked for a passphrase or a password before giving up,
+/// as OpenSSH's `NumberOfPasswordPrompts`.
+const PROMPT_TRIES: usize = 3;
+
+/// Asks a person for a secret while logging in, as OpenSSH asks on its terminal.
+///
+/// Jato asks for a passphrase when an encrypted key file has none, and for a password when no
+/// other credential logged in and the server accepts passwords. Each is asked up to three
+/// times; returning `None` stops asking. The methods are called on a blocking thread, so they
+/// may read a terminal. Without a prompter nothing is asked, which suits automation.
+pub trait Prompter: Send + Sync + fmt::Debug {
+    /// The passphrase for the encrypted private key file at `path`, or `None` to skip the key.
+    fn passphrase(&self, path: &Path) -> Option<Secret>;
+
+    /// The password for `username` on `node`, or `None` to stop asking.
+    fn password(&self, node: &Node, username: &str) -> Option<Secret>;
+}
 
 /// How to authenticate as one user on one server.
 ///
@@ -26,6 +47,7 @@ const MAX_KEYBOARD_INTERACTIVE_ROUNDS: usize = 5;
 pub struct Auth {
     username: String,
     credentials: Vec<Credential>,
+    prompter: Option<Arc<dyn Prompter>>,
 }
 
 #[derive(Debug)]
@@ -47,6 +69,12 @@ enum Credential {
 struct Login<'a> {
     username: &'a str,
     legacy_algorithms: bool,
+}
+
+/// What has been tried so far, and the methods the server said it still accepts.
+struct Progress {
+    tried: Vec<String>,
+    offered: Option<MethodSet>,
 }
 
 /// What came of one attempt.
@@ -81,6 +109,7 @@ impl Auth {
         Self {
             username: username.into(),
             credentials: Vec::new(),
+            prompter: None,
         }
     }
 
@@ -107,7 +136,7 @@ impl Auth {
 
     /// Try the default identities in `~/.ssh`: `id_ed25519`, `id_ecdsa` and `id_rsa`, in
     /// that order, skipping files that are missing. Encrypted ones are skipped, as there is
-    /// no passphrase for them.
+    /// no passphrase for them, unless a [`Prompter`] is set to ask for it.
     pub fn default_identities(mut self) -> Self {
         self.credentials.push(Credential::DefaultIdentities);
         self
@@ -135,6 +164,13 @@ impl Auth {
     /// first avoids spending an attempt on a method they refuse.
     pub fn password(mut self, password: Secret) -> Self {
         self.credentials.push(Credential::Password(password));
+        self
+    }
+
+    /// Ask `prompter` for what is missing: the passphrase of an encrypted key file given
+    /// without one, and a password when nothing else logs in. See [`Prompter`].
+    pub fn prompter(mut self, prompter: Arc<dyn Prompter>) -> Self {
+        self.prompter = Some(prompter);
         self
     }
 
@@ -195,7 +231,7 @@ impl Attempt<'_> {
 
 /// Log in as `auth`'s user on the connection `handle` to `node`, trying each credential in
 /// order until one is accepted. Attempts with a method the server has said it does not accept
-/// are skipped.
+/// are skipped. With a [`Prompter`], a password is asked for last.
 ///
 /// RSA keys sign with SHA-2. SHA-1 (`ssh-rsa`) is used only with `legacy_algorithms`, for a
 /// server that offers nothing better.
@@ -214,43 +250,146 @@ pub(crate) async fn authenticate<H: Handler>(
         legacy_algorithms,
     };
     let identities = existing_default_identities(auth).await;
-    let mut tried = Vec::new();
-    let mut offered: Option<MethodSet> = None;
+    let mut progress = Progress {
+        tried: Vec::new(),
+        offered: None,
+    };
     for attempt in auth.attempts(&identities) {
+        if progress
+            .attempt(handle, &login, node, &attempt, auth.prompter.as_ref())
+            .await?
+        {
+            return Ok(());
+        }
+    }
+    if let Some(prompter) = &auth.prompter
+        && prompt_for_password(handle, &login, node, prompter, &mut progress).await?
+    {
+        return Ok(());
+    }
+    Err(Error::AuthFailed {
+        node: node.clone(),
+        username: auth.username.clone(),
+        tried: progress.tried,
+    })
+}
+
+impl Progress {
+    /// Make `attempt` unless the server has said it does not accept its method, and record
+    /// what came of it. `true` if the server accepted it.
+    async fn attempt<H: Handler>(
+        &mut self,
+        handle: &mut Handle<H>,
+        login: &Login<'_>,
+        node: &Node,
+        attempt: &Attempt<'_>,
+        prompter: Option<&Arc<dyn Prompter>>,
+    ) -> Result<bool, Error> {
         let label = attempt.label();
-        if offered
+        if self
+            .offered
             .as_ref()
             .is_some_and(|methods| !methods.contains(&attempt.method()))
         {
             tracing::debug!(attempt = %label, "skipped, the server does not offer this method");
-            tried.push(format!("{label} (not offered by the server)"));
-            continue;
+            self.tried
+                .push(format!("{label} (not offered by the server)"));
+            return Ok(false);
         }
         tracing::debug!(attempt = %label, "trying");
-        match try_attempt(handle, &login, &attempt)
+        match try_attempt(handle, login, attempt, prompter)
             .await
             .map_err(|error| Error::protocol(node.clone(), error))?
         {
             Outcome::Accepted => {
                 tracing::debug!(attempt = %label, "accepted");
-                return Ok(());
+                Ok(true)
             }
             Outcome::Refused(methods) => {
                 tracing::debug!(attempt = %label, "refused");
-                tried.push(label);
-                offered = Some(methods);
+                self.tried.push(label);
+                self.offered = Some(methods);
+                Ok(false)
             }
             Outcome::Unusable(reason) => {
                 tracing::debug!(attempt = %label, %reason, "could not be used");
-                tried.push(format!("{label} ({reason})"));
+                self.tried.push(format!("{label} ({reason})"));
+                Ok(false)
             }
         }
     }
-    Err(Error::AuthFailed {
-        node: node.clone(),
-        username: auth.username.clone(),
-        tried,
-    })
+
+    /// The password method to use: keyboard-interactive if the server accepts it, as network
+    /// devices often accept only that, else a plain password. `None` if it accepts neither.
+    fn password_method(&self) -> Option<MethodKind> {
+        match &self.offered {
+            None => Some(MethodKind::KeyboardInteractive),
+            Some(methods) if methods.contains(&MethodKind::KeyboardInteractive) => {
+                Some(MethodKind::KeyboardInteractive)
+            }
+            Some(methods) if methods.contains(&MethodKind::Password) => Some(MethodKind::Password),
+            Some(_) => None,
+        }
+    }
+}
+
+/// Ask `prompter` for a password and try it, up to [`PROMPT_TRIES`] times. `true` if the
+/// server accepted one.
+async fn prompt_for_password<H: Handler>(
+    handle: &mut Handle<H>,
+    login: &Login<'_>,
+    node: &Node,
+    prompter: &Arc<dyn Prompter>,
+    progress: &mut Progress,
+) -> Result<bool, Error> {
+    for _ in 0..PROMPT_TRIES {
+        let Some(method) = progress.password_method() else {
+            tracing::debug!("the server accepts no password, so none is asked for");
+            return Ok(false);
+        };
+        let Some(password) = ask_password(prompter, node, login.username).await else {
+            progress.tried.push("password prompt (declined)".into());
+            return Ok(false);
+        };
+        let attempt = match method {
+            MethodKind::KeyboardInteractive => Attempt::KeyboardInteractive(password.expose()),
+            _ => Attempt::Password(password.expose()),
+        };
+        if progress
+            .attempt(handle, login, node, &attempt, None)
+            .await?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Ask `prompter` for the passphrase of the key file at `path`, on a blocking thread.
+async fn ask_passphrase(prompter: &Arc<dyn Prompter>, path: &Path) -> Option<Secret> {
+    let prompter = Arc::clone(prompter);
+    let path = path.to_path_buf();
+    match task::spawn_blocking(move || prompter.passphrase(&path)).await {
+        Ok(answer) => answer,
+        Err(error) => {
+            tracing::warn!(%error, "the passphrase prompt failed");
+            None
+        }
+    }
+}
+
+/// Ask `prompter` for the password of `username` on `node`, on a blocking thread.
+async fn ask_password(prompter: &Arc<dyn Prompter>, node: &Node, username: &str) -> Option<Secret> {
+    let prompter = Arc::clone(prompter);
+    let node = node.clone();
+    let username = username.to_string();
+    match task::spawn_blocking(move || prompter.password(&node, &username)).await {
+        Ok(answer) => answer,
+        Err(error) => {
+            tracing::warn!(%error, "the password prompt failed");
+            None
+        }
+    }
 }
 
 /// The default identity files that exist, if `auth` uses them.
@@ -276,16 +415,27 @@ async fn try_attempt<H: Handler>(
     handle: &mut Handle<H>,
     login: &Login<'_>,
     attempt: &Attempt<'_>,
+    prompter: Option<&Arc<dyn Prompter>>,
 ) -> Result<Outcome, russh::Error> {
     match attempt {
         Attempt::Agent(socket) => try_agent(handle, login, *socket).await,
-        Attempt::KeyFile { path, passphrase } => match fs::read_to_string(path).await {
-            Ok(text) => try_key(handle, login, &Secret::new(text), *passphrase).await,
-            Err(error) => Ok(Outcome::Unusable(format!(
-                "could not be read: {}",
-                error.kind()
-            ))),
-        },
+        Attempt::KeyFile { path, passphrase } => {
+            let text = match fs::read_to_string(path).await {
+                Ok(text) => Secret::new(text),
+                Err(error) => {
+                    return Ok(Outcome::Unusable(format!(
+                        "could not be read: {}",
+                        error.kind()
+                    )));
+                }
+            };
+            match (passphrase, prompter) {
+                (None, Some(prompter)) => {
+                    try_key_asking(handle, login, &text, path, prompter).await
+                }
+                _ => try_key(handle, login, &text, *passphrase).await,
+            }
+        }
         Attempt::Key { key, passphrase } => {
             try_key(handle, login, &Secret::new((*key).to_string()), *passphrase).await
         }
@@ -308,10 +458,46 @@ async fn try_key<H: Handler>(
     key: &Secret,
     passphrase: Option<&str>,
 ) -> Result<Outcome, russh::Error> {
-    let key = match decode_secret_key(key.expose(), passphrase) {
-        Ok(key) => key,
+    match decode_secret_key(key.expose(), passphrase) {
+        Ok(key) => try_decoded_key(handle, login, key).await,
+        Err(error) => Ok(Outcome::Unusable(format!("could not be loaded: {error}"))),
+    }
+}
+
+/// Log in with the private key in the file at `path`, whose text is `key`, asking `prompter`
+/// for its passphrase if it is encrypted, up to [`PROMPT_TRIES`] times.
+async fn try_key_asking<H: Handler>(
+    handle: &mut Handle<H>,
+    login: &Login<'_>,
+    key: &Secret,
+    path: &Path,
+    prompter: &Arc<dyn Prompter>,
+) -> Result<Outcome, russh::Error> {
+    match decode_secret_key(key.expose(), None) {
+        Ok(decoded) => return try_decoded_key(handle, login, decoded).await,
+        Err(KeyError::KeyIsEncrypted) => {
+            tracing::debug!(path = %path.display(), "the key is encrypted, asking for its passphrase");
+        }
         Err(error) => return Ok(Outcome::Unusable(format!("could not be loaded: {error}"))),
-    };
+    }
+    for _ in 0..PROMPT_TRIES {
+        let Some(passphrase) = ask_passphrase(prompter, path).await else {
+            return Ok(Outcome::Unusable("no passphrase given".into()));
+        };
+        match decode_secret_key(key.expose(), Some(passphrase.expose())) {
+            Ok(decoded) => return try_decoded_key(handle, login, decoded).await,
+            Err(error) => tracing::debug!(%error, "the passphrase did not decrypt the key"),
+        }
+    }
+    Ok(Outcome::Unusable("the passphrase was wrong".into()))
+}
+
+/// Log in with a decoded private key.
+async fn try_decoded_key<H: Handler>(
+    handle: &mut Handle<H>,
+    login: &Login<'_>,
+    key: PrivateKey,
+) -> Result<Outcome, russh::Error> {
     let hash = rsa_hash(handle, key.algorithm(), login.legacy_algorithms).await?;
     let key = PrivateKeyWithHashAlg::new(Arc::new(key), hash);
     let result = handle.authenticate_publickey(login.username, key).await?;

@@ -1,6 +1,8 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::shared::error::Error;
+use crate::ssh::auth::Prompter;
 use crate::ssh::connect::{ConnectOptions, Session};
 use crate::ssh_config::file::{Entry, read_config};
 use crate::ssh_config::resolve::{HostConfig, Local, resolve_host, resolve_jumps};
@@ -112,6 +114,26 @@ impl Route {
         let jumps: Vec<_> = self.jumps.iter().map(HostConfig::hop).collect();
         let options = self.target.connect_options(options);
         Session::connect_via(&jumps, &self.target.hop(), &options).await
+    }
+
+    /// [`Route::connect`], asking `prompter` for any key passphrase or password a hop needs,
+    /// as `ssh` asks on its terminal.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Session::connect_via`].
+    pub async fn connect_with_prompter(
+        &self,
+        options: &ConnectOptions,
+        prompter: Arc<dyn Prompter>,
+    ) -> Result<Session, Error> {
+        let mut jumps = Vec::with_capacity(self.jumps.len());
+        for jump in &self.jumps {
+            jumps.push(jump.hop().prompter(Arc::clone(&prompter)));
+        }
+        let options = self.target.connect_options(options);
+        let target = self.target.hop().prompter(prompter);
+        Session::connect_via(&jumps, &target, &options).await
     }
 }
 

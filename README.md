@@ -20,6 +20,8 @@ Jato is in early development; the plan for v1 is
   Windows the OpenSSH agent's pipe or Pageant), key files (encrypted
   ones with a passphrase), the default identities in `~/.ssh`, private keys held in memory,
   and passwords (keyboard-interactive first, then plain password).
+- Asking a person for a key passphrase or a password while logging in, through a `Prompter`
+  you implement, as `ssh` asks on its terminal; nothing is asked without one.
 - Host key checking per connection: `Strict` and `AcceptNew` against one or more
   `known_hosts` files (plain, hashed, wildcard and negated entries, `@revoked` markers), such
   as a lab's own file beside `~/.ssh/known_hosts`, or `Insecure` by choice.
