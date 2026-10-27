@@ -8,6 +8,10 @@ Three kinds of tests, all run with `cargo test`:
 | Container | `tests/integration/` | Docker, `ssh-keygen`, `ssh-agent`, the `jato-test-sshd` image | `cargo test -- --ignored` |
 | Real devices and hosts | `tests/integration/devices.rs`, `hosts.rs` | targets in the environment | `cargo test -- --ignored` |
 
+The release workflow (`.github/workflows/release.yml`) runs the unit and container tests
+before every release. The real device and host tests return early there, as no targets are
+set.
+
 Integration tests are marked `#[ignore]`, so plain `cargo test` runs only unit tests. They
 are one test binary, `tests/integration/main.rs`, with a module per area, so the shared
 helpers in `support/` are compiled once.

@@ -14,6 +14,8 @@ Jato is in early development; the plan for v1 is
 - Direct connections, and connections through a chain of jump hosts (like `ProxyJump`),
   with time limits for connecting and for authentication, and keepalives that notice a dead
   connection.
+- Probing a server without logging in (`Session::probe`): the SSH handshake through key
+  exchange and the host key check, to tell that an SSH server answers, not just an open port.
 - Authentication, tried in the order you add credentials: ssh-agent (a Unix socket, or on
   Windows the OpenSSH agent's pipe or Pageant), key files (encrypted
   ones with a passphrase), the default identities in `~/.ssh`, private keys held in memory,
@@ -93,3 +95,10 @@ device tests change the configuration and undo it:
 JATO_EOS_HOST=<device-address> JATO_EOS_USER=sherpa JATO_EOS_KEY=path/to/key \
   cargo test devices:: -- --ignored
 ```
+
+## Releases
+
+Releases are made on GitHub, not crates.io. Bumping `version` in `Cargo.toml` on `main`
+runs `.github/workflows/release.yml`. It runs the formatting, lint, unit and container
+checks, then tags the commit `v<version>` and creates a GitHub release with generated notes.
+A push to `main` whose version already has a tag does nothing.
