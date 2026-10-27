@@ -13,6 +13,7 @@ mod jump;
 mod keepalive;
 mod posix;
 mod probe;
+mod prompts;
 mod scp;
 mod sftp;
 mod shell;

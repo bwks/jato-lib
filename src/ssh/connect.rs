@@ -13,7 +13,7 @@ use crate::shared::error::Error;
 use crate::shared::node::Node;
 use crate::shared::time::within;
 use crate::ssh::algorithms;
-use crate::ssh::auth::{self, Auth};
+use crate::ssh::auth::{self, Auth, Prompter};
 use crate::ssh::host_key::{self, HostKeyPolicy};
 
 /// How long to wait for a TCP connection and the SSH handshake, by default.
@@ -103,6 +103,13 @@ impl Hop {
     /// These algorithms are weaker; allow them only for the hops that need them.
     pub fn allow_legacy_algorithms(mut self) -> Self {
         self.legacy_algorithms = true;
+        self
+    }
+
+    /// Ask `prompter` for a key passphrase or a password this hop's credentials lack, as
+    /// [`Auth::prompter`] does.
+    pub fn prompter(mut self, prompter: Arc<dyn Prompter>) -> Self {
+        self.auth = self.auth.prompter(prompter);
         self
     }
 }

@@ -15,7 +15,7 @@ pub use sftp::client::Sftp;
 pub use shared::error::Error;
 pub use shared::node::Node;
 pub use shared::secret::Secret;
-pub use ssh::auth::Auth;
+pub use ssh::auth::{Auth, Prompter};
 pub use ssh::connect::{ConnectOptions, Hop, Session};
 pub use ssh::exec::{Event, Exec, Exit, Output};
 pub use ssh::host_key::{HostKeyPolicy, KnownHosts};
