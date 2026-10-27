@@ -42,6 +42,26 @@ sequenceDiagram
     S-->>C: Session (target handle, jump handles kept open)
 ```
 
+## Probing
+
+`Session::probe(hop, options)` runs steps 1 and 2 for a single hop, then disconnects
+without step 3. It answers "is an SSH server there?" more strictly than a TCP connect: a
+port that accepts connections but does not speak SSH, such as a device whose SSH server is
+still starting or a port forward with nothing behind it, fails or times out. `russh`'s
+`connect_stream` returns only once key exchange has finished, so a successful probe means
+the server completed key exchange and passed the hop's host key check. The hop's credentials
+are not used, so the server logs no login attempt. `connect_timeout` limits the whole probe,
+and the hop's legacy setting applies.
+
+```mermaid
+flowchart LR
+    tcp[TCP connect] --> ver[Version exchange] --> kex[Key exchange] --> key[Host key check] --> bye[Disconnect]
+    tcp -->|refused| E1[Connect]
+    ver -->|not SSH| E2[Protocol or Timeout]
+    kex -->|no common algorithm| E3[Protocol]
+    key -->|refused| E4[HostKey*]
+```
+
 ## Keepalives
 
 `ConnectOptions::keepalive_interval` (30 seconds by default) sends a keepalive request when
