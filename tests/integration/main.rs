@@ -12,6 +12,7 @@ mod hosts;
 mod jump;
 mod keepalive;
 mod posix;
+mod probe;
 mod scp;
 mod sftp;
 mod shell;

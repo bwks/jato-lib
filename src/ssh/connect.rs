@@ -166,6 +166,26 @@ impl Session {
         })
     }
 
+    /// Check that an SSH server answers at `hop`: connect, run the SSH handshake through key
+    /// exchange and the host key check, then disconnect without logging in. The hop's
+    /// credentials are not used, so the server sees no login attempt. A port that accepts
+    /// TCP connections but does not speak SSH fails.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Connect`] if the TCP connection fails.
+    /// - [`Error::HostKeyUnknown`], [`Error::HostKeyChanged`] or [`Error::HostKeyRevoked`] if
+    ///   the host key is refused.
+    /// - [`Error::Timeout`] if the handshake takes longer than `options.connect_timeout`.
+    /// - [`Error::Protocol`] if the SSH protocol fails.
+    #[tracing::instrument(skip_all, fields(node = %hop.node))]
+    pub async fn probe(hop: &Hop, options: &ConnectOptions) -> Result<(), Error> {
+        let handshake = handshake(None, hop, options);
+        let handle = within(options.connect_timeout, "connect", &hop.node, handshake).await?;
+        tracing::debug!("handshake complete");
+        disconnect(&handle, &hop.node).await
+    }
+
     /// The server this session is connected to.
     pub fn node(&self) -> &Node {
         &self.node
