@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -296,30 +298,42 @@ impl From<russh::Error> for ClientError {
 }
 
 /// Connect and log in to `hop`, directly or through the jump host `via`.
-async fn open_hop(
-    via: Option<&Jump>,
-    hop: &Hop,
-    options: &ConnectOptions,
-) -> Result<Handle<Client>, Error> {
-    let first = within(
-        options.connect_timeout,
-        "connect",
-        &hop.node,
-        handshake(via, hop, options),
-    )
-    .await;
-    let Handshake { mut handle, .. } = match first {
-        Err(refusal @ Error::HostKeyUnknown { .. }) => {
-            ask_about_host_key(hop, refusal).await?;
-            let again = handshake(via, hop, options);
-            within(options.connect_timeout, "connect", &hop.node, again).await?
-        }
-        other => other?,
-    };
-    let login = auth::authenticate(&mut handle, &hop.auth, &hop.node, hop.legacy_algorithms);
-    within(options.auth_timeout, "authentication", &hop.node, login).await?;
-    tracing::debug!(node = %hop.node, "logged in");
-    Ok(handle)
+///
+/// The future is boxed, as are `handshake`'s and `start_ssh`'s: each async function holds its
+/// callee's future, and debug builds give every poll frame room for those futures and their
+/// temporaries, so an unboxed chain needed several hundred KiB of the polling thread's stack,
+/// more than the 1 MiB main thread Windows gives a program.
+fn open_hop<'a>(
+    via: Option<&'a Jump>,
+    hop: &'a Hop,
+    options: &'a ConnectOptions,
+) -> Pin<Box<dyn Future<Output = Result<Handle<Client>, Error>> + Send + 'a>> {
+    Box::pin(async move {
+        let first = within(
+            options.connect_timeout,
+            "connect",
+            &hop.node,
+            handshake(via, hop, options),
+        )
+        .await;
+        let Handshake { mut handle, .. } = match first {
+            Err(refusal @ Error::HostKeyUnknown { .. }) => {
+                ask_about_host_key(hop, refusal).await?;
+                let again = handshake(via, hop, options);
+                within(options.connect_timeout, "connect", &hop.node, again).await?
+            }
+            other => other?,
+        };
+        let login = Box::pin(auth::authenticate(
+            &mut handle,
+            &hop.auth,
+            &hop.node,
+            hop.legacy_algorithms,
+        ));
+        within(options.auth_timeout, "authentication", &hop.node, login).await?;
+        tracing::debug!(node = %hop.node, "logged in");
+        Ok(handle)
+    })
 }
 
 /// With [`HostKeyPolicy::Ask`] and a prompter, ask whether to trust the unknown host key in
@@ -352,80 +366,88 @@ async fn ask_about_host_key(hop: &Hop, refusal: Error) -> Result<(), Error> {
 
 /// Reach `hop`, over TCP or through a tunnel from the jump host `via`, run the SSH handshake
 /// and check the host key.
-async fn handshake(
-    via: Option<&Jump>,
-    hop: &Hop,
-    options: &ConnectOptions,
-) -> Result<Handshake, Error> {
-    let algorithms = algorithms::preferred(hop.legacy_algorithms);
-    let host_keys =
-        host_key::preferred_algorithms(&hop.host_key, &hop.node, &algorithms.key).await?;
-    let config = Config {
-        preferred: Preferred {
-            key: Cow::Owned(host_keys),
-            ..algorithms
-        },
-        keepalive_interval: options.keepalive_interval,
-        keepalive_max: options.keepalive_max,
-        ..Config::default()
-    };
-    let accepted = Arc::new(OnceLock::new());
-    let client = Client {
-        node: hop.node.clone(),
-        host_key: hop.host_key.clone(),
-        accepted: Arc::clone(&accepted),
-    };
-    let handle = match via {
-        None => {
-            let stream = TcpStream::connect((hop.node.host(), hop.node.port()))
-                .await
-                .map_err(|source| Error::Connect {
-                    node: hop.node.clone(),
-                    source,
-                })?;
-            if let Err(error) = stream.set_nodelay(true) {
-                tracing::debug!(%error, "could not disable Nagle's algorithm");
+fn handshake<'a>(
+    via: Option<&'a Jump>,
+    hop: &'a Hop,
+    options: &'a ConnectOptions,
+) -> Pin<Box<dyn Future<Output = Result<Handshake, Error>> + Send + 'a>> {
+    Box::pin(async move {
+        let algorithms = algorithms::preferred(hop.legacy_algorithms);
+        let host_keys =
+            host_key::preferred_algorithms(&hop.host_key, &hop.node, &algorithms.key).await?;
+        let config = Config {
+            preferred: Preferred {
+                key: Cow::Owned(host_keys),
+                ..algorithms
+            },
+            keepalive_interval: options.keepalive_interval,
+            keepalive_max: options.keepalive_max,
+            ..Config::default()
+        };
+        let accepted = Arc::new(OnceLock::new());
+        let client = Client {
+            node: hop.node.clone(),
+            host_key: hop.host_key.clone(),
+            accepted: Arc::clone(&accepted),
+        };
+        let handle = match via {
+            None => {
+                let stream = TcpStream::connect((hop.node.host(), hop.node.port()))
+                    .await
+                    .map_err(|source| Error::Connect {
+                        node: hop.node.clone(),
+                        source,
+                    })?;
+                if let Err(error) = stream.set_nodelay(true) {
+                    tracing::debug!(%error, "could not disable Nagle's algorithm");
+                }
+                start_ssh(config, stream, client).await
             }
-            start_ssh(config, stream, client).await
-        }
-        Some(jump) => {
-            let channel = jump
-                .handle
-                .channel_open_direct_tcpip(
-                    hop.node.host(),
-                    u32::from(hop.node.port()),
-                    TUNNEL_ORIGINATOR_ADDRESS,
-                    TUNNEL_ORIGINATOR_PORT,
-                )
-                .await
-                .map_err(|error| Error::Tunnel {
-                    via: jump.node.clone(),
-                    node: hop.node.clone(),
-                    source: Box::new(error),
-                })?;
-            start_ssh(config, channel.into_stream(), client).await
-        }
-    }?;
-    let Some(host_key) = accepted.get().cloned() else {
-        return Err(Error::protocol(
-            hop.node.clone(),
-            "the handshake finished without checking a host key",
-        ));
-    };
-    Ok(Handshake { handle, host_key })
+            Some(jump) => {
+                let channel = jump
+                    .handle
+                    .channel_open_direct_tcpip(
+                        hop.node.host(),
+                        u32::from(hop.node.port()),
+                        TUNNEL_ORIGINATOR_ADDRESS,
+                        TUNNEL_ORIGINATOR_PORT,
+                    )
+                    .await
+                    .map_err(|error| Error::Tunnel {
+                        via: jump.node.clone(),
+                        node: hop.node.clone(),
+                        source: Box::new(error),
+                    })?;
+                start_ssh(config, channel.into_stream(), client).await
+            }
+        }?;
+        let Some(host_key) = accepted.get().cloned() else {
+            return Err(Error::protocol(
+                hop.node.clone(),
+                "the handshake finished without checking a host key",
+            ));
+        };
+        Ok(Handshake { handle, host_key })
+    })
 }
 
 /// Run the SSH handshake over `stream`, with `client` checking the host key.
-async fn start_ssh<S>(config: Config, stream: S, client: Client) -> Result<Handle<Client>, Error>
+fn start_ssh<S>(
+    config: Config,
+    stream: S,
+    client: Client,
+) -> Pin<Box<dyn Future<Output = Result<Handle<Client>, Error>> + Send>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let node = client.node.clone();
-    match client::connect_stream(Arc::new(config), stream, client).await {
-        Ok(handle) => Ok(handle),
-        Err(ClientError::HostKey(error)) => Err(error),
-        Err(ClientError::Ssh(error)) => Err(Error::protocol(node, error)),
-    }
+    Box::pin(async move {
+        let node = client.node.clone();
+        match client::connect_stream(Arc::new(config), stream, client).await {
+            Ok(handle) => Ok(handle),
+            Err(ClientError::HostKey(error)) => Err(error),
+            Err(ClientError::Ssh(error)) => Err(Error::protocol(node, error)),
+        }
+    })
 }
 
 /// Tell the server at `node` the session is ending.

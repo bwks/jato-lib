@@ -6,6 +6,14 @@
 use crate::support::prompter::ScriptedPrompter;
 use crate::support::sshd::{Network, PASSWORD, Sshd, USER};
 use jato::{Auth, ConnectOptions, Error, Hop, HostKeyPolicy, Node, Secret, Session};
+use std::thread;
+use tokio::runtime;
+
+/// The stack a connection through two jump hosts may use on the thread that polls it,
+/// runtime included. A Linux debug build needs about 160 KiB; before the connection futures
+/// were boxed it needed more than 384 KiB, and a Windows debug build overflowed the 1 MiB
+/// main thread.
+const MAIN_THREAD_STACK_BUDGET: usize = 256 * 1024;
 
 fn password() -> Auth {
     Auth::new(USER).password(Secret::new(PASSWORD.into()))
@@ -144,4 +152,37 @@ async fn an_unknown_jump_host_is_asked_about() {
         .unwrap();
     assert_eq!(session.node(), &Node::new(target.name.clone(), 22));
     assert_eq!(prompter.asked().len(), 2);
+}
+
+/// A connection through jump hosts must leave room in a Windows main thread's 1 MiB stack in
+/// a debug build, where frames are larger than on Linux, so programs that poll it from their
+/// main thread need no bigger thread. The connection is polled from a thread with
+/// [`MAIN_THREAD_STACK_BUDGET`] while the runtime's workers run russh's session tasks, as in a
+/// program using `#[tokio::main]`.
+#[test]
+#[ignore]
+fn two_jump_hosts_fit_in_a_small_main_thread_stack() {
+    let network = Network::create();
+    let first = Sshd::start_in(&network);
+    let second = Sshd::start_in(&network);
+    let target = Sshd::start_in(&network);
+    let jumps = [entry_hop(&first), inner_hop(&second)];
+    let target_hop = inner_hop(&target);
+    let connecting = thread::Builder::new()
+        .stack_size(MAIN_THREAD_STACK_BUDGET)
+        .spawn(move || {
+            let runtime = runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let session = Session::connect_via(&jumps, &target_hop, &ConnectOptions::default())
+                    .await
+                    .unwrap();
+                session.close().await.unwrap();
+            });
+        })
+        .unwrap();
+    connecting.join().unwrap();
 }
