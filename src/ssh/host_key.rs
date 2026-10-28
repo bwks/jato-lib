@@ -376,7 +376,7 @@ pub(crate) fn known_hosts_line(host: &str, port: u16, key: &PublicKey) -> Result
 }
 
 /// `key` in OpenSSH public key form, as in `known_hosts` and `authorized_keys`.
-fn openssh_key(key: &PublicKey) -> Result<String, Error> {
+pub(crate) fn openssh_key(key: &PublicKey) -> Result<String, Error> {
     key.to_openssh().map_err(|error| Error::Io {
         context: "encoding a host key in OpenSSH form".into(),
         source: io::Error::other(error),

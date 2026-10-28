@@ -16,6 +16,8 @@ Jato is in early development; the plan for v1 is
   connection.
 - Probing a server without logging in (`Session::probe`): the SSH handshake through key
   exchange and the host key check, to tell that an SSH server answers, not just an open port.
+  `Session::host_key` runs the same handshake and returns the key the server offered, as
+  `ssh-keyscan` does, for recording in a `known_hosts` file.
 - Authentication, tried in the order you add credentials: ssh-agent (a Unix socket, or on
   Windows the OpenSSH agent's pipe or Pageant), key files (encrypted
   ones with a passphrase), the default identities in `~/.ssh`, private keys held in memory,
