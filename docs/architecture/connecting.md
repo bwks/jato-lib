@@ -102,6 +102,23 @@ The `Session` keeps each jump host's connection open behind the target's. Droppi
 closes them all; `Session::close` disconnects the target first, then the jump hosts from
 the nearest back. If a hop fails while connecting, the jump hosts already open are closed.
 
+## Stack use
+
+Connecting nests futures: `connect_via` awaits `open_hop` for each hop, which awaits
+`handshake`, `start_ssh` and `russh`'s `connect_stream`, then authentication. Polling them
+runs one frame per level on the thread that polls the session, often a program's main
+thread. Debug builds give each frame room for the callee's future and its temporaries, so
+with every level inline a connection through jump hosts needed more than 384 KiB of that
+thread's stack on Linux, and overflowed the 1 MiB main thread Windows gives a program.
+
+`open_hop`, `handshake` and `start_ssh` therefore return boxed futures
+(`Pin<Box<dyn Future + Send>>`), and authentication is boxed where `open_hop` awaits it. Each
+large future is built on the heap and its caller's frame holds a pointer, which brought a
+connection through two jump hosts down to about 160 KiB on a Linux debug build, runtime
+included. The test `jump::two_jump_hosts_fit_in_a_small_main_thread_stack` keeps it under
+256 KiB (see [testing](testing.md)). `russh` runs each connection's session in a task it
+spawns, so on a multi-thread runtime that work uses the workers' stacks.
+
 ## Host keys
 
 `host_key::verdict` reads the `known_hosts` text the way OpenSSH does:

@@ -86,7 +86,7 @@ async fn from_config() -> Result<(), jato::Error> {
 ```
 
 As an `ssh` client, with the `terminal` feature
-(`jato = { git = "https://github.com/bwks/jato-lib", tag = "v0.4.0", features = ["terminal"] }`):
+(`jato = { git = "https://github.com/bwks/jato-lib", tag = "v0.4.2", features = ["terminal"] }`):
 asking on the terminal about an unknown server and for passphrases, then a shell.
 
 ```rust,ignore
@@ -129,4 +129,5 @@ JATO_EOS_HOST=<device-address> JATO_EOS_USER=sherpa JATO_EOS_KEY=path/to/key \
 Releases are made on GitHub, not crates.io. Bumping `version` in `Cargo.toml` on `main`
 runs `.github/workflows/release.yml`. It runs the formatting, lint, unit and container
 checks, then tags the commit `v<version>` and creates a GitHub release with generated notes.
+Pull requests are checked by `.github/workflows/ci.yml`, on Linux and Windows.
 A push to `main` whose version already has a tag does nothing.
