@@ -62,6 +62,15 @@ flowchart LR
     key -->|refused| E4[HostKey*]
 ```
 
+`Session::host_key(hop, options)` is the same handshake, returning the host key that passed
+the check in OpenSSH public key form, as `ssh-keyscan` prints it. The `russh` handler keeps
+the key it checked in a `OnceLock` shared with `handshake`, which returns it with the
+handle; a handshake that finished without checking a key fails as `Error::Protocol`. A
+server has a key for each algorithm it supports but offers only one: the first in the
+client's host key preference that the server has. Types already recorded for the server
+move to the front of that preference ([Host keys](#host-keys)), so once the key is recorded
+with `KnownHosts::record`, a strict connection is offered the same key again.
+
 ## Keepalives
 
 `ConnectOptions::keepalive_interval` (30 seconds by default) sends a keepalive request when

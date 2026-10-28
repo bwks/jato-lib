@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use russh::client::{self, Config, Handle, Handler};
-use russh::keys::PublicKeyOrCertificate;
+use russh::keys::{PublicKey, PublicKeyOrCertificate};
 use russh::{Disconnect, Preferred};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -74,6 +74,15 @@ struct Jump {
 pub(crate) struct Client {
     node: Node,
     host_key: HostKeyPolicy,
+    /// The host key the server offered, once it has passed the check.
+    accepted: Arc<OnceLock<PublicKey>>,
+}
+
+/// A connection after the SSH handshake, before logging in.
+struct Handshake {
+    handle: Handle<Client>,
+    /// The host key the server offered and the check accepted.
+    host_key: PublicKey,
 }
 
 /// Why the `russh` side of a connection failed.
@@ -188,9 +197,31 @@ impl Session {
     #[tracing::instrument(skip_all, fields(node = %hop.node))]
     pub async fn probe(hop: &Hop, options: &ConnectOptions) -> Result<(), Error> {
         let handshake = handshake(None, hop, options);
-        let handle = within(options.connect_timeout, "connect", &hop.node, handshake).await?;
+        let done = within(options.connect_timeout, "connect", &hop.node, handshake).await?;
         tracing::debug!("handshake complete");
-        disconnect(&handle, &hop.node).await
+        disconnect(&done.handle, &hop.node).await
+    }
+
+    /// The host key the server at `hop` offers, in OpenSSH public key form
+    /// (`ssh-ed25519 AAAA...`), as `ssh-keyscan` reports it. It runs the same handshake as
+    /// [`Session::probe`], so the key is checked against the hop's [`HostKeyPolicy`] first,
+    /// and nobody logs in. The server offers the key of the first host key algorithm both
+    /// sides support, so a hop with [`Hop::allow_legacy_algorithms`] may get an `ssh-rsa`
+    /// key from a server with nothing newer.
+    ///
+    /// Record the key with [`KnownHosts::record`](crate::KnownHosts::record) to accept that
+    /// server in strict connections later.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Session::probe`], and [`Error::Io`] if the key cannot be encoded.
+    #[tracing::instrument(skip_all, fields(node = %hop.node))]
+    pub async fn host_key(hop: &Hop, options: &ConnectOptions) -> Result<String, Error> {
+        let handshake = handshake(None, hop, options);
+        let done = within(options.connect_timeout, "connect", &hop.node, handshake).await?;
+        tracing::debug!("handshake complete");
+        disconnect(&done.handle, &hop.node).await?;
+        host_key::openssh_key(&done.host_key)
     }
 
     /// The server this session is connected to.
@@ -245,6 +276,9 @@ impl Handler for Client {
                 host_key::check(&self.host_key, &self.node, key)
                     .await
                     .map_err(ClientError::HostKey)?;
+                if self.accepted.set(key.clone()).is_err() {
+                    tracing::debug!("the server's host key was checked more than once");
+                }
                 Ok(true)
             }
             PublicKeyOrCertificate::Certificate(_) => Err(ClientError::HostKey(Error::protocol(
@@ -274,7 +308,7 @@ async fn open_hop(
         handshake(via, hop, options),
     )
     .await;
-    let mut handle = match first {
+    let Handshake { mut handle, .. } = match first {
         Err(refusal @ Error::HostKeyUnknown { .. }) => {
             ask_about_host_key(hop, refusal).await?;
             let again = handshake(via, hop, options);
@@ -322,7 +356,7 @@ async fn handshake(
     via: Option<&Jump>,
     hop: &Hop,
     options: &ConnectOptions,
-) -> Result<Handle<Client>, Error> {
+) -> Result<Handshake, Error> {
     let algorithms = algorithms::preferred(hop.legacy_algorithms);
     let host_keys =
         host_key::preferred_algorithms(&hop.host_key, &hop.node, &algorithms.key).await?;
@@ -335,11 +369,13 @@ async fn handshake(
         keepalive_max: options.keepalive_max,
         ..Config::default()
     };
+    let accepted = Arc::new(OnceLock::new());
     let client = Client {
         node: hop.node.clone(),
         host_key: hop.host_key.clone(),
+        accepted: Arc::clone(&accepted),
     };
-    match via {
+    let handle = match via {
         None => {
             let stream = TcpStream::connect((hop.node.host(), hop.node.port()))
                 .await
@@ -369,7 +405,14 @@ async fn handshake(
                 })?;
             start_ssh(config, channel.into_stream(), client).await
         }
-    }
+    }?;
+    let Some(host_key) = accepted.get().cloned() else {
+        return Err(Error::protocol(
+            hop.node.clone(),
+            "the handshake finished without checking a host key",
+        ));
+    };
+    Ok(Handshake { handle, host_key })
 }
 
 /// Run the SSH handshake over `stream`, with `client` checking the host key.
