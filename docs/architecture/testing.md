@@ -8,9 +8,18 @@ Three kinds of tests, all run with `cargo test`:
 | Container | `tests/integration/` | Docker, `ssh-keygen`, `ssh-agent`, the `jato-test-sshd` image | `cargo test -- --ignored` |
 | Real devices and hosts | `tests/integration/devices.rs`, `hosts.rs` | targets in the environment | `cargo test -- --ignored` |
 
-The release workflow (`.github/workflows/release.yml`) runs the unit and container tests
-before every release. The real device and host tests return early there, as no targets are
-set.
+The CI workflow (`.github/workflows/ci.yml`) runs on every pull request and push to `main`:
+on Linux, formatting, clippy and the unit tests with and without `--all-features`, then the
+container tests with every feature; on Windows, clippy and the unit tests with every feature,
+for the Windows-only console and agent code. The release workflow
+(`.github/workflows/release.yml`) runs the Linux checks again before every release. The real
+device and host tests return early in both, as no targets are set.
+
+`jump::two_jump_hosts_fit_in_a_small_main_thread_stack` connects through two jump hosts from
+a thread with a 256 KiB stack, while a multi-thread runtime's workers run russh's tasks. It
+guards the boxed connection futures (see [connecting](connecting.md#stack-use)): without
+them, a debug build needed more than 384 KiB there, and a Windows debug build overflowed its
+1 MiB main thread.
 
 Integration tests are marked `#[ignore]`, so plain `cargo test` runs only unit tests. They
 are one test binary, `tests/integration/main.rs`, with a module per area, so the shared

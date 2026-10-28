@@ -1,8 +1,9 @@
 # Release Jato on GitHub when the version in Cargo.toml changes on main.
 #
 # A push to main whose Cargo.toml version has no `v<version>` tag yet runs the checks from
-# AGENTS.md (format, lint, unit and container tests), then tags that commit and creates a
-# GitHub release with generated notes. Nothing is published to crates.io.
+# AGENTS.md (format, lint, unit and container tests, with and without the optional
+# features), then tags that commit and creates a GitHub release with generated notes.
+# Nothing is published to crates.io. The CI workflow checks pull requests and Windows.
 name: Release
 
 on:
@@ -69,14 +70,20 @@ jobs:
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Lint with all features
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
       - name: Unit tests
         run: cargo test
+
+      - name: Unit tests with all features
+        run: cargo test --all-features
 
       - name: Build the test SSH server image
         run: docker build -t jato-test-sshd tests/sshd
 
       - name: Container tests
-        run: cargo test --test integration -- --ignored
+        run: cargo test --all-features --test integration -- --ignored
 
   release:
     name: Create release
