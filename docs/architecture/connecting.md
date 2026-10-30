@@ -254,6 +254,12 @@ the cache if it holds an answer; otherwise, and when the same question comes aga
 same connection (the cached answer was wrong), it goes to `inner`, and the answer is kept.
 Declined questions are not kept, and host key questions always go to `inner`.
 
+Connections made at once take turns: every prompter from one cache shares a lock held while a
+question is answered, cache check included. So only one question is on the terminal at a time,
+and a connection that waited while another answered the same question takes that answer from
+the cache instead of asking again. Prompts run in `spawn_blocking`, so the lock is a plain
+`std::sync::Mutex`.
+
 `TerminalPrompter`, with the `terminal` feature, asks OpenSSH's questions on the terminal; see
 [terminal.md](terminal.md).
 
