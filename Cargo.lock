@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "jato"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "crossterm",
  "crossterm_winapi",
