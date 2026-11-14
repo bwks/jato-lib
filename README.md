@@ -95,7 +95,7 @@ async fn from_config() -> Result<(), jato::Error> {
 ```
 
 As an `ssh` client, with the `terminal` feature
-(`jato = { git = "https://github.com/bwks/jato-lib", tag = "v0.5.0", features = ["terminal"] }`):
+(`jato = { git = "https://github.com/bwks/jato-lib", tag = "v0.5.1", features = ["terminal"] }`):
 asking on the terminal about an unknown server and for passphrases, then a shell.
 
 ```rust,ignore
