@@ -9,8 +9,12 @@ use jato::{
     TelnetOptions,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
+#[cfg(target_os = "linux")]
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::task::JoinHandle;
+#[cfg(target_os = "linux")]
+use tokio::time;
 
 use crate::support::sshd::{PASSWORD, Sshd, USER};
 
@@ -124,13 +128,13 @@ async fn a_closed_port_is_refused() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_connection_that_hangs_times_out() {
-    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    let socket = TcpSocket::new_v4().unwrap();
     socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let listener = socket.listen(1).unwrap();
     let address = listener.local_addr().unwrap();
     let mut held = Vec::new();
     while let Ok(Ok(stream)) =
-        tokio::time::timeout(Duration::from_millis(200), TcpStream::connect(address)).await
+        time::timeout(Duration::from_millis(200), TcpStream::connect(address)).await
     {
         held.push(stream);
         assert!(held.len() < 16, "the accept queue never filled");
