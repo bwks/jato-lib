@@ -15,6 +15,7 @@ its document here, or add one and list it below.
 | [ssh_config.md](ssh_config.md) | Reading OpenSSH client configuration into hops and routes |
 | [shell.md](shell.md) | Interactive shells on a PTY, prompt matching and discovery |
 | [terminal.md](terminal.md) | The `terminal` feature: asking on the terminal, and `ssh host` in the local terminal |
+| [telnet.md](telnet.md) | The `telnet` feature: serial consoles over telnet, directly or through an SSH server; what QEMU does |
 | [device.md](device.md) | Device CLIs: profiles, modes, enable, configuration |
 | [errors.md](errors.md) | The error type and what errors may and may not contain |
 | [secrets.md](secrets.md) | How passwords, keys and passphrases are held |
@@ -97,9 +98,14 @@ src/
   terminal/           the `terminal` feature
     prompter.rs       TerminalPrompter
     shell.rs          ShellEnd; Session::interactive_shell
+    passthrough.rs    the terminal loop shared by the shell and the telnet console
     console.rs        raw mode, size, TERM, resizes
-    escape.rs         the ~. escape
+    escape.rs         the ~. and Ctrl+] escapes
     windows.rs        Windows console VT modes
+  telnet/             the `telnet` feature
+    protocol.rs       RFC 854 decoding, negotiation and encoding, no I/O
+    client.rs         Telnet, TelnetOptions; over TCP or an SSH channel
+    interactive.rs    TelnetEnd; Telnet::interactive (with `terminal`)
   device/             device CLIs over a shell
     cli.rs            Device, DeviceOptions
     profile.rs        DeviceProfile, ConfigMode, Mode; prompts from a discovered prompt
@@ -126,6 +132,7 @@ src/
 | `ssh_config` | `SshConfig`, `Route`, `HostConfig`, `JumpHost`, `StrictHostKeyChecking` | OpenSSH client configuration into hops and routes |
 | `device` | `Device`, `DeviceOptions`, `DeviceProfile`, `ConfigMode`, `Mode` | Device CLIs driven through a shell |
 | `terminal` | `TerminalPrompter`, `ShellEnd` (and `Session::interactive_shell`) | The `terminal` feature: OpenSSH's questions on the terminal, and a shell in the local terminal |
+| `telnet` | `Telnet`, `TelnetOptions`, `TelnetEnd` (with `terminal`) | The `telnet` feature: serial consoles over telnet, directly or through an SSH server |
 
 How the modules depend on each other (an arrow means "uses"):
 
@@ -152,8 +159,13 @@ graph TD
         host_key[host_key]
         algorithms[algorithms]
     end
+    subgraph telnet_area[telnet, with the feature]
+        telnet[telnet]
+    end
     device --> shell
     device --> connect
+    telnet --> connect
+    telnet --> exec
     shell --> channel
     shell --> connect
     exec --> channel
@@ -176,7 +188,8 @@ graph TD
 
 `shared` (error, glob, node, secret, time) is used by every module and is left out of the graph.
 `channel` holds what `exec` and `shell` share: turning `russh` channel messages into stdout,
-stderr and exit events, and waiting for the server to accept a request.
+stderr and exit events, and waiting for the server to accept a request. `telnet` uses
+`connect` only for `Telnet::connect_via`'s `direct-tcpip` channel, and `exec` for `Event`.
 
 ## Main types
 

@@ -1,23 +1,14 @@
-//! An interactive shell in the local terminal, as `ssh host` gives: typed bytes to the server
-//! (watching for `~.`), the server's output to stdout, and window resizes, until the shell
-//! ends.
-
-use std::io::{self, Read, Write};
-use std::thread;
-
-use tokio::sync::mpsc::{self, Receiver, Sender};
+//! An interactive shell in the local terminal, as `ssh host` gives. The loop itself is in
+//! `passthrough.rs`, shared with the telnet console.
 
 use crate::shared::error::Error;
 use crate::ssh::connect::Session;
 use crate::ssh::exec::{Event, Exit};
-use crate::ssh::shell::ShellOptions;
-use crate::terminal::console::{self, RawMode, ResizeWatcher};
-use crate::terminal::escape::EscapeFilter;
+use crate::ssh::shell::{Shell, ShellOptions};
+use crate::terminal::console;
+use crate::terminal::escape::Escape;
+use crate::terminal::passthrough::{self, Passthrough};
 
-/// Bytes read from the terminal at a time.
-const KEY_BUFFER: usize = 4096;
-/// Reads of typed bytes queued for the server.
-const KEY_QUEUE: usize = 64;
 /// The exit code when the shell's own is not known, as OpenSSH uses for its own errors.
 const UNKNOWN_EXIT: i32 = 255;
 
@@ -56,7 +47,9 @@ impl Session {
     /// key, Ctrl+C included, reaches the server, and it is restored however the shell ends.
     /// On Windows the console is switched to VT input and output for the same effect. Typing
     /// `~.` at the start of a line ends the session even when the server no longer answers;
-    /// `~~` sends a single `~`.
+    /// `~~` sends a single `~`. A line on stderr names the escape once the shell is open
+    /// (`Connected to <node>. Escape: ~. at the start of a line.`), and another says the
+    /// connection closed when it ends (`Connection to <node> closed.`).
     ///
     /// Typed bytes are read on a thread of their own, as reading a terminal blocks. A read
     /// still waiting when the shell ends is left behind and ends with the process, so call
@@ -78,86 +71,25 @@ impl Session {
             rows,
         };
         let mut shell = self.shell(&options).await?;
-
-        let raw_mode = RawMode::enable().map_err(io_error("putting the terminal in raw mode"))?;
-        let mut keys = read_keys();
-        let mut resizes =
-            ResizeWatcher::new().map_err(io_error("watching the terminal for resizes"))?;
-        let mut escape = EscapeFilter::new();
-        let mut stdout = io::stdout();
-        let mut exit = Exit::Unknown;
-        let mut escaped = false;
-        loop {
-            tokio::select! {
-                event = shell.next_event() => match event? {
-                    Some(Event::Stdout(bytes) | Event::Stderr(bytes)) => {
-                        write_through(&mut stdout, &bytes)
-                            .map_err(io_error("writing to the terminal"))?;
-                    }
-                    Some(Event::Exit(status)) => exit = status,
-                    None => break,
-                },
-                Some(typed) = keys.recv() => {
-                    let filtered = escape.filter(&typed);
-                    if !filtered.send.is_empty() {
-                        shell.send_bytes(&filtered.send).await?;
-                    }
-                    if filtered.disconnect {
-                        tracing::debug!("disconnected with the ~. escape");
-                        escaped = true;
-                        break;
-                    }
-                }
-                Some((columns, rows)) = resizes.changed() => {
-                    shell.resize(columns, rows).await?;
-                }
-            }
-        }
-        drop(raw_mode);
-        Ok(ShellEnd { exit, escaped })
+        let ended = passthrough::run(&mut shell, self.node(), Escape::TildeDot).await?;
+        Ok(ShellEnd {
+            exit: ended.exit,
+            escaped: ended.escaped,
+        })
     }
 }
 
-/// Read typed bytes on a thread of their own, as reading the terminal blocks. The thread
-/// ends when the terminal closes or the receiver is dropped.
-fn read_keys() -> Receiver<Vec<u8>> {
-    let (sender, receiver) = mpsc::channel(KEY_QUEUE);
-    thread::spawn(move || forward_keys(&sender));
-    receiver
-}
-
-fn forward_keys(sender: &Sender<Vec<u8>>) {
-    let mut stdin = io::stdin();
-    let mut buffer = [0; KEY_BUFFER];
-    loop {
-        match stdin.read(&mut buffer) {
-            Ok(0) => {
-                tracing::debug!("terminal input closed");
-                return;
-            }
-            Ok(read) => {
-                if sender.blocking_send(buffer[..read].to_vec()).is_err() {
-                    return;
-                }
-            }
-            Err(error) => {
-                tracing::debug!(%error, "failed to read the terminal");
-                return;
-            }
-        }
+impl Passthrough for Shell {
+    async fn next_event(&mut self) -> Result<Option<Event>, Error> {
+        Shell::next_event(self).await
     }
-}
 
-fn write_through(out: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
-    out.write_all(bytes)?;
-    out.flush()
-}
+    async fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        Shell::send_bytes(self, bytes).await
+    }
 
-/// Turns an I/O error while `context` into [`Error::Io`].
-fn io_error(context: &'static str) -> impl Fn(io::Error) -> Error {
-    move |source| Error::Io {
-        context: context.into(),
-        source,
+    async fn resize(&mut self, columns: u32, rows: u32) -> Result<(), Error> {
+        Shell::resize(self, columns, rows).await
     }
 }
 
@@ -170,6 +102,18 @@ mod tests {
             exit,
             escaped: false,
         }
+    }
+
+    fn assert_send<T: Send>(_: &T) {}
+
+    fn interactive_shell_future_is_send(session: &Session) {
+        assert_send(&session.interactive_shell());
+    }
+
+    #[test]
+    fn the_interactive_shell_can_be_spawned() {
+        let check: fn(&Session) = interactive_shell_future_is_send;
+        assert!(!format!("{check:p}").is_empty());
     }
 
     #[test]

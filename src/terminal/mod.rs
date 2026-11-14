@@ -2,6 +2,7 @@
 //! passwords and host key confirmation on it, and running an interactive shell in it.
 pub(crate) mod console;
 pub(crate) mod escape;
+pub(crate) mod passthrough;
 pub(crate) mod prompter;
 pub(crate) mod shell;
 #[cfg(windows)]

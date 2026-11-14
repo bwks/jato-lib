@@ -1,6 +1,6 @@
 [package]
 name = "jato"
-version = "0.4.3"
+version = "0.5.0"
 edition = "2024"
 license = "MIT"
 description = "SSH connections to hosts and network devices"
@@ -12,6 +12,9 @@ categories = ["network-programming"]
 [features]
 # Use a terminal as `ssh` does: TerminalPrompter and Session::interactive_shell.
 terminal = ["dep:crossterm", "dep:crossterm_winapi", "dep:rpassword", "tokio/signal", "tokio/sync"]
+# Telnet, a cleartext protocol, for serial consoles: Telnet, and Telnet::interactive with
+# `terminal`. Off by default, so cleartext is an explicit choice. It adds no dependency.
+telnet = []
 
 [dependencies]
 crossterm = { version = "0.29", default-features = false, features = ["windows"], optional = true }
@@ -27,6 +30,10 @@ zeroize = "1"
 
 [target.'cfg(windows)'.dependencies]
 crossterm_winapi = { version = "0.9.1", optional = true }
+
+[[example]]
+name = "console"
+required-features = ["terminal", "telnet"]
 
 [dev-dependencies]
 # The stack test polls a connection from a small thread while the workers run russh's tasks.

@@ -27,10 +27,10 @@ const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 /// How many keepalives in a row may go unanswered, by default, before the connection is
 /// given up as lost.
 const DEFAULT_KEEPALIVE_MAX: usize = 3;
-/// The originator a tunnel through a jump host reports, as OpenSSH's `ProxyJump` does.
-const TUNNEL_ORIGINATOR_ADDRESS: &str = "127.0.0.1";
-/// The originator port a tunnel through a jump host reports.
-const TUNNEL_ORIGINATOR_PORT: u32 = 0;
+/// The originator a tunnel through an SSH server reports, as OpenSSH's `ProxyJump` does.
+pub(crate) const TUNNEL_ORIGINATOR_ADDRESS: &str = "127.0.0.1";
+/// The originator port a tunnel through an SSH server reports.
+pub(crate) const TUNNEL_ORIGINATOR_PORT: u32 = 0;
 
 /// One server to connect to: where it is, how to log in, and how to check its host key.
 #[derive(Debug)]

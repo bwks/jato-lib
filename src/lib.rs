@@ -8,6 +8,8 @@ mod sftp;
 mod shared;
 mod ssh;
 mod ssh_config;
+#[cfg(feature = "telnet")]
+mod telnet;
 #[cfg(feature = "terminal")]
 mod terminal;
 
@@ -25,6 +27,10 @@ pub use ssh::prompt_cache::PromptCache;
 pub use ssh::shell::{Prompt, Shell, ShellOptions};
 pub use ssh_config::config::{Route, SshConfig};
 pub use ssh_config::resolve::{HostConfig, JumpHost, StrictHostKeyChecking};
+#[cfg(feature = "telnet")]
+pub use telnet::client::{Telnet, TelnetOptions};
+#[cfg(all(feature = "telnet", feature = "terminal"))]
+pub use telnet::interactive::TelnetEnd;
 #[cfg(feature = "terminal")]
 pub use terminal::prompter::TerminalPrompter;
 #[cfg(feature = "terminal")]

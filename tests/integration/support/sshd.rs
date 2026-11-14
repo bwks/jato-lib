@@ -142,6 +142,19 @@ impl Sshd {
         path
     }
 
+    /// The address the container reaches this host by, the gateway of its Docker network.
+    /// A listener bound to it on this host is reachable from the server, and from nowhere
+    /// beyond this host. Only the telnet tests use it.
+    #[cfg(feature = "telnet")]
+    pub fn gateway(&self) -> String {
+        docker(&[
+            "inspect",
+            "-f",
+            "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}",
+            &self.container,
+        ])
+    }
+
     /// Freeze the server, as a dead network path looks: connections stay open but nothing
     /// answers.
     pub fn pause(&self) {

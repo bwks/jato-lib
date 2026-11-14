@@ -6,6 +6,7 @@ Three kinds of tests, all run with `cargo test`:
 | ---- | ----- | ----- | -------- |
 | Unit | `#[cfg(test)]` modules at the end of each source file | nothing | `cargo test` |
 | Container | `tests/integration/` | Docker, `ssh-keygen`, `ssh-agent`, the `jato-test-sshd` image | `cargo test -- --ignored` |
+| Telnet | `tests/integration/telnet.rs`, with `--features telnet` | nothing: each test runs its own server on a local listener (`connect_via` alone is ignored and needs the image) | `cargo test --features telnet` |
 | Real devices and hosts | `tests/integration/devices.rs`, `hosts.rs` | targets in the environment | `cargo test -- --ignored` |
 
 The CI workflow (`.github/workflows/ci.yml`) runs on every pull request and push to `main`:

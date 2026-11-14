@@ -6,7 +6,7 @@ wildcard arm. There is no `Result` alias.
 
 ## What an error carries
 
-Every variant names the `Node` it concerns (except `Io`, `InvalidPrompt` and `SshConfig`,
+The `Telnet*` variants exist only with the `telnet` feature. Every variant names the `Node` it concerns (except `Io`, `InvalidPrompt` and `SshConfig`,
 which may happen before there is one) and what was being done, so an error read on its own says where
 and what. The underlying cause, where there is one, is kept as the `source`.
 
@@ -51,6 +51,12 @@ graph LR
         ShellClosed
         InvalidPrompt
     end
+    subgraph Telnet
+        TelnetRefused
+        TelnetTimeout
+        TelnetInUse
+        TelnetClosed
+    end
     subgraph Devices
         DeviceCommand
     end
@@ -79,6 +85,10 @@ graph LR
 | `ShellClosed` | The shell closed while Jato waited for a prompt |
 | `InvalidPrompt` | A prompt pattern is invalid, or a device's prompt does not fit its profile |
 | `SshConfig` | An `ssh_config` file cannot be read, has a line that cannot be parsed, or a setting with a bad value, naming the file and line; or `ProxyJump` loops, naming the host |
+| `TelnetRefused` | With the `telnet` feature: the telnet server refuses or cannot be reached, or the SSH server asked to reach it refuses (`via` names it) |
+| `TelnetTimeout` | With `telnet`: no connection, or no tunnel from the SSH server, within `TelnetOptions::connect_timeout` |
+| `TelnetInUse` | With `telnet`: connected, then nothing within `negotiation_timeout`; a QEMU console treats a second client this way |
+| `TelnetClosed` | With `telnet`: the server closed before sending anything, or the connection was closed or broken while reading or sending |
 | `DeviceCommand` | A device reports an error, a shell command exits non-zero, or a step (enable, configuration, commit) does not do what was asked |
 
 ## Inside the crate
