@@ -22,7 +22,7 @@ and it adds no dependency: it uses the Tokio TCP and timers Jato already has.
 | `Telnet::next_event` | `Event::Stdout` with the protocol removed; `None` once the server closes. Cancel-safe |
 | `Telnet::resize` | sends the window size only if the server asked for it (`DO NAWS`) |
 | `Telnet::send_break` | `IAC BREAK` |
-| `Telnet::interactive` | with `terminal`: the console in the local terminal, returns `TelnetEnd { escaped }` |
+| `Telnet::interactive(options)` | with `terminal`: the console in the local terminal, returns `TelnetEnd { escaped }`; `InteractiveOptions::banner` turns the banner lines off |
 
 Errors: `TelnetRefused` (refused or unreachable, directly or by the SSH server), `TelnetTimeout`
 (no connection within `connect_timeout`), `TelnetInUse` (connected, then silence for
@@ -177,7 +177,10 @@ Once the server has closed, `next_event` returns `None` and sending fails with
 `Telnet::interactive` reports the local window size (sent only if the server asked), then
 runs the same loop as `Session::interactive_shell`, `terminal::passthrough::run` (see
 [terminal.md](terminal.md)), with `Ctrl+]` added to `~.` as an escape. Raw mode, resizes, the
-Windows console modes and the banner lines are that loop's.
+Windows console modes and the banner lines are that loop's. The banner is on by default;
+with `InteractiveOptions { banner: false }` the console prints no lines of its own, and
+`TelnetEnd::escaped` tells the caller whether an escape (`Ctrl+]` or `~.`) or the console
+ended the session, so it can print its own.
 
 ## Testing
 
@@ -194,5 +197,6 @@ Windows console modes and the banner lines are that loop's.
   runs the console on this host's Docker gateway address and reaches it through the test SSH
   server, and checks a refusal names the SSH server.
 - `examples/console.rs` (`cargo run --example console --features terminal,telnet -- <host>
-  <port> [--via <ssh host>]`) runs a console in the terminal; it was used against a Sherpa
-  lab's Alpine console, directly and through an SSH server, with both escapes.
+  <port> [--via <ssh host>] [--no-banner]`) runs a console in the terminal; it was used
+  against a Sherpa lab's Alpine console, directly and through an SSH server, with both
+  escapes. With `--no-banner` it prints its own closing line from `TelnetEnd::escaped`.

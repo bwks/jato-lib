@@ -98,7 +98,7 @@ src/
   terminal/           the `terminal` feature
     prompter.rs       TerminalPrompter
     shell.rs          ShellEnd; Session::interactive_shell
-    passthrough.rs    the terminal loop shared by the shell and the telnet console
+    passthrough.rs    InteractiveOptions; the loop shared by the shell and the telnet console
     console.rs        raw mode, size, TERM, resizes
     escape.rs         the ~. and Ctrl+] escapes
     windows.rs        Windows console VT modes
@@ -131,7 +131,7 @@ src/
 | `sftp` | `Sftp`, `Metadata` | File transfer over the `sftp` subsystem; uploads through a temporary file and a rename |
 | `ssh_config` | `SshConfig`, `Route`, `HostConfig`, `JumpHost`, `StrictHostKeyChecking` | OpenSSH client configuration into hops and routes |
 | `device` | `Device`, `DeviceOptions`, `DeviceProfile`, `ConfigMode`, `Mode` | Device CLIs driven through a shell |
-| `terminal` | `TerminalPrompter`, `ShellEnd` (and `Session::interactive_shell`) | The `terminal` feature: OpenSSH's questions on the terminal, and a shell in the local terminal |
+| `terminal` | `TerminalPrompter`, `ShellEnd`, `InteractiveOptions` (and `Session::interactive_shell`) | The `terminal` feature: OpenSSH's questions on the terminal, and a shell in the local terminal |
 | `telnet` | `Telnet`, `TelnetOptions`, `TelnetEnd` (with `terminal`) | The `telnet` feature: serial consoles over telnet, directly or through an SSH server |
 
 How the modules depend on each other (an arrow means "uses"):

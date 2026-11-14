@@ -7,7 +7,7 @@ use crate::ssh::exec::Event;
 use crate::telnet::client::Telnet;
 use crate::terminal::console;
 use crate::terminal::escape::Escape;
-use crate::terminal::passthrough::{self, Passthrough};
+use crate::terminal::passthrough::{self, InteractiveOptions, Passthrough};
 
 /// How an interactive console ended, from [`Telnet::interactive`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,10 +30,12 @@ impl Telnet {
     ///
     /// Two escapes end the session even when the console no longer answers: `Ctrl+]`,
     /// anywhere, as `telnet` and `virsh console` take it, and `~.` at the start of a line, as
-    /// `ssh` takes it (`~~` sends a single `~`). `Ctrl+]` is not sent to the console. A line
-    /// on stderr names the escapes once the session starts
-    /// (`Connected to <node>. Escape: Ctrl+] or ~. at the start of a line.`), and another
-    /// says the connection closed when it ends (`Connection to <node> closed.`).
+    /// `ssh` takes it (`~~` sends a single `~`). `Ctrl+]` is not sent to the console. Unless
+    /// `options` turns the banner off, a line on stderr names the escapes once the session
+    /// starts (`Connected to <host:port>. Escape: Ctrl+] or ~. at the start of a line.`),
+    /// and another says the connection closed when it ends
+    /// (`Connection to <host:port> closed.`). [`TelnetEnd::escaped`] says whether an escape
+    /// ended it, for a caller that prints its own lines.
     ///
     /// Typed bytes are read on a thread of their own, as reading a terminal blocks. A read
     /// still waiting when the session ends is left behind and ends with the process, so
@@ -45,11 +47,11 @@ impl Telnet {
     ///   written to.
     /// - [`Error::TelnetClosed`] if the connection breaks.
     #[tracing::instrument(skip_all, fields(node = %self.node()))]
-    pub async fn interactive(&mut self) -> Result<TelnetEnd, Error> {
+    pub async fn interactive(&mut self, options: &InteractiveOptions) -> Result<TelnetEnd, Error> {
         let (columns, rows) = console::size();
         self.resize(columns, rows).await?;
         let node = self.node().clone();
-        let ended = passthrough::run(self, &node, Escape::TildeDotOrCtrlBracket).await?;
+        let ended = passthrough::run(self, &node, Escape::TildeDotOrCtrlBracket, options).await?;
         Ok(TelnetEnd {
             escaped: ended.escaped,
         })
@@ -77,7 +79,7 @@ mod tests {
     fn assert_send<T: Send>(_: &T) {}
 
     fn interactive_future_is_send(telnet: &mut Telnet) {
-        assert_send(&telnet.interactive());
+        assert_send(&telnet.interactive(&InteractiveOptions::default()));
     }
 
     #[test]

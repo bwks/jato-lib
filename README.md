@@ -38,13 +38,14 @@ Jato is in early development; the plan for v1 is
   resizes and the exit status.
 - With the `terminal` feature: `TerminalPrompter`, which asks OpenSSH's questions on the
   terminal, and `Session::interactive_shell`, which runs `ssh host` in the local terminal
-  (raw mode, resizes, `~.`, Windows consoles included), with no `unsafe` code. It prints a
-  line on stderr naming the escape when the shell opens, and another when it closes.
+  (raw mode, resizes, `~.`, Windows consoles included), with no `unsafe` code. By default it
+  prints a line on stderr naming the escape when the shell opens, and another when it
+  closes; `InteractiveOptions::banner` turns them off for a program that prints its own.
 - With the `telnet` feature: `Telnet`, a telnet client for serial consoles such as QEMU's,
   over TCP or through an SSH server's `direct-tcpip` channel (`Telnet::connect_via`), with
   time limits, an "in use" error for a console another client holds, breaks
   (`send_break`), and, with `terminal` too, `Telnet::interactive`, which runs the console in
-  the local terminal (`Ctrl+]` or `~.` to leave). It starts no negotiation and sends no
+  the local terminal (`Ctrl+]` or `~.` to leave, with the same optional banner). It starts no negotiation and sends no
   subnegotiation unasked. Telnet is cleartext, so the feature is off by default; it adds no
   dependency.
 - Interactive shells on a PTY: prompt discovery, prompt matching that waits for each
@@ -99,14 +100,14 @@ asking on the terminal about an unknown server and for passphrases, then a shell
 
 ```rust,ignore
 use std::sync::Arc;
-use jato::{ConnectOptions, SshConfig, TerminalPrompter};
+use jato::{ConnectOptions, InteractiveOptions, SshConfig, TerminalPrompter};
 
 async fn ssh(host: &str) -> Result<i32, jato::Error> {
     let route = SshConfig::load()?.route(host)?;
     let session = route
         .connect_with_prompter(&ConnectOptions::default(), Arc::new(TerminalPrompter::new()))
         .await?;
-    let ended = session.interactive_shell().await?;
+    let ended = session.interactive_shell(&InteractiveOptions::default()).await?;
     Ok(ended.exit_code())
 }
 ```
@@ -115,13 +116,17 @@ A serial console through the SSH server it listens on, with the `telnet` and `te
 features (`features = ["terminal", "telnet"]`); `examples/console.rs` is a complete program:
 
 ```rust,ignore
-use jato::{ConnectOptions, Node, SshConfig, Telnet, TelnetOptions};
+use jato::{ConnectOptions, InteractiveOptions, Node, SshConfig, Telnet, TelnetOptions};
 
 async fn console(server: &str, host: &str, port: u16) -> Result<bool, jato::Error> {
     let session = SshConfig::load()?.route(server)?.connect(&ConnectOptions::default()).await?;
     let node = Node::new(host, port);
     let mut telnet = Telnet::connect_via(&session, &node, &TelnetOptions::default()).await?;
-    let ended = telnet.interactive().await?;
+    // No banner: say how it ended, with the node's own name.
+    let mut quiet = InteractiveOptions::default();
+    quiet.banner = false;
+    let ended = telnet.interactive(&quiet).await?;
+    eprintln!("\nConsole of {host} {}.", if ended.escaped { "left" } else { "closed" });
     drop(telnet);
     session.close().await?;
     Ok(ended.escaped)

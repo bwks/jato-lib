@@ -7,7 +7,7 @@ use crate::ssh::exec::{Event, Exit};
 use crate::ssh::shell::{Shell, ShellOptions};
 use crate::terminal::console;
 use crate::terminal::escape::Escape;
-use crate::terminal::passthrough::{self, Passthrough};
+use crate::terminal::passthrough::{self, InteractiveOptions, Passthrough};
 
 /// The exit code when the shell's own is not known, as OpenSSH uses for its own errors.
 const UNKNOWN_EXIT: i32 = 255;
@@ -47,9 +47,11 @@ impl Session {
     /// key, Ctrl+C included, reaches the server, and it is restored however the shell ends.
     /// On Windows the console is switched to VT input and output for the same effect. Typing
     /// `~.` at the start of a line ends the session even when the server no longer answers;
-    /// `~~` sends a single `~`. A line on stderr names the escape once the shell is open
-    /// (`Connected to <node>. Escape: ~. at the start of a line.`), and another says the
-    /// connection closed when it ends (`Connection to <node> closed.`).
+    /// `~~` sends a single `~`. Unless `options` turns the banner off, a line on stderr names
+    /// the escape once the shell is open (`Connected to <host:port>. Escape: ~. at the start
+    /// of a line.`), and another says the connection closed when it ends
+    /// (`Connection to <host:port> closed.`). [`ShellEnd::escaped`] says whether `~.` ended
+    /// it, for a caller that prints its own lines.
     ///
     /// Typed bytes are read on a thread of their own, as reading a terminal blocks. A read
     /// still waiting when the shell ends is left behind and ends with the process, so call
@@ -63,15 +65,15 @@ impl Session {
     /// - [`Error::Protocol`] or [`Error::Timeout`] if the connection fails while the shell
     ///   runs.
     #[tracing::instrument(skip_all, fields(node = %self.node()))]
-    pub async fn interactive_shell(&self) -> Result<ShellEnd, Error> {
+    pub async fn interactive_shell(&self, options: &InteractiveOptions) -> Result<ShellEnd, Error> {
         let (columns, rows) = console::size();
-        let options = ShellOptions {
+        let pty = ShellOptions {
             term: console::term_name(),
             columns,
             rows,
         };
-        let mut shell = self.shell(&options).await?;
-        let ended = passthrough::run(&mut shell, self.node(), Escape::TildeDot).await?;
+        let mut shell = self.shell(&pty).await?;
+        let ended = passthrough::run(&mut shell, self.node(), Escape::TildeDot, options).await?;
         Ok(ShellEnd {
             exit: ended.exit,
             escaped: ended.escaped,
@@ -107,7 +109,7 @@ mod tests {
     fn assert_send<T: Send>(_: &T) {}
 
     fn interactive_shell_future_is_send(session: &Session) {
-        assert_send(&session.interactive_shell());
+        assert_send(&session.interactive_shell(&InteractiveOptions::default()));
     }
 
     #[test]
