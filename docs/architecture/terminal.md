@@ -94,6 +94,12 @@ fits in a byte, else 255.
   a fresh line, and on a serial console the only way to one is Enter, which the device acts
   on. A shell does not take `Ctrl+]`, so a `telnet` run inside an SSH session still gets it.
   No other escapes are supported.
+- A cursor position report (`ESC [ row ; column R`) does not move the start of a line. A
+  node that asks where the cursor is (`ESC [ 6n`), as busybox `ash` does after every prompt,
+  gets the terminal's answer on stdin with the typed bytes. Counted as typed, the answer's
+  final `R` would put the cursor mid-line, and `~.` after the prompt would be sent on, as it
+  is in OpenSSH. The report is still sent; only the line-start state skips it, across reads
+  too. Other sequences, such as arrow keys, are typed keys and end the line start.
 
 ```mermaid
 sequenceDiagram
