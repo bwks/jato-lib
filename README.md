@@ -38,7 +38,16 @@ Jato is in early development; the plan for v1 is
   resizes and the exit status.
 - With the `terminal` feature: `TerminalPrompter`, which asks OpenSSH's questions on the
   terminal, and `Session::interactive_shell`, which runs `ssh host` in the local terminal
-  (raw mode, resizes, `~.`, Windows consoles included), with no `unsafe` code.
+  (raw mode, resizes, `~.`, Windows consoles included), with no `unsafe` code. By default it
+  prints a line on stderr naming the escape when the shell opens, and another when it
+  closes; `InteractiveOptions::banner` turns them off for a program that prints its own.
+- With the `telnet` feature: `Telnet`, a telnet client for serial consoles such as QEMU's,
+  over TCP or through an SSH server's `direct-tcpip` channel (`Telnet::connect_via`), with
+  time limits, an "in use" error for a console another client holds, breaks
+  (`send_break`), and, with `terminal` too, `Telnet::interactive`, which runs the console in
+  the local terminal (`Ctrl+]` or `~.` to leave, with the same optional banner). It starts no negotiation and sends no
+  subnegotiation unasked. Telnet is cleartext, so the feature is off by default; it adds no
+  dependency.
 - Interactive shells on a PTY: prompt discovery, prompt matching that waits for each
   command's echo, and cleaned command output.
 - Device CLIs through profiles for Cisco IOS and IOS XE, Cisco NX-OS, Arista EOS, Juniper Junos
@@ -86,26 +95,48 @@ async fn from_config() -> Result<(), jato::Error> {
 ```
 
 As an `ssh` client, with the `terminal` feature
-(`jato = { git = "https://github.com/bwks/jato-lib", tag = "v0.4.2", features = ["terminal"] }`):
+(`jato = { git = "https://github.com/bwks/jato-lib", tag = "v0.5.0", features = ["terminal"] }`):
 asking on the terminal about an unknown server and for passphrases, then a shell.
 
 ```rust,ignore
 use std::sync::Arc;
-use jato::{ConnectOptions, SshConfig, TerminalPrompter};
+use jato::{ConnectOptions, InteractiveOptions, SshConfig, TerminalPrompter};
 
 async fn ssh(host: &str) -> Result<i32, jato::Error> {
     let route = SshConfig::load()?.route(host)?;
     let session = route
         .connect_with_prompter(&ConnectOptions::default(), Arc::new(TerminalPrompter::new()))
         .await?;
-    let ended = session.interactive_shell().await?;
+    let ended = session.interactive_shell(&InteractiveOptions::default()).await?;
     Ok(ended.exit_code())
+}
+```
+
+A serial console through the SSH server it listens on, with the `telnet` and `terminal`
+features (`features = ["terminal", "telnet"]`); `examples/console.rs` is a complete program:
+
+```rust,ignore
+use jato::{ConnectOptions, InteractiveOptions, Node, SshConfig, Telnet, TelnetOptions};
+
+async fn console(server: &str, host: &str, port: u16) -> Result<bool, jato::Error> {
+    let session = SshConfig::load()?.route(server)?.connect(&ConnectOptions::default()).await?;
+    let node = Node::new(host, port);
+    let mut telnet = Telnet::connect_via(&session, &node, &TelnetOptions::default()).await?;
+    // No banner: say how it ended, with the node's own name.
+    let mut quiet = InteractiveOptions::default();
+    quiet.banner = false;
+    let ended = telnet.interactive(&quiet).await?;
+    eprintln!("\nConsole of {host} {}.", if ended.escaped { "left" } else { "closed" });
+    drop(telnet);
+    session.close().await?;
+    Ok(ended.escaped)
 }
 ```
 
 ## Tests
 
-Unit tests run with `cargo test --all-features`. Integration tests start a disposable OpenSSH server in
+Unit tests run with `cargo test --all-features`; so do the telnet tests, which start their
+own servers on a local listener. Integration tests start a disposable OpenSSH server in
 Docker and also need `ssh-keygen` and `ssh-agent`:
 
 ```sh

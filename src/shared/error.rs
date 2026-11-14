@@ -192,6 +192,57 @@ pub enum Error {
         node: Node,
     },
 
+    /// A telnet server, or the SSH server asked to reach it, refused the connection or could
+    /// not reach it. Nothing listens there, or for a serial console, the node is not
+    /// running. `via` is the SSH server the connection went through, if any.
+    #[cfg(feature = "telnet")]
+    #[error("{node}: the telnet connection was refused{}", through(via.as_ref()))]
+    TelnetRefused {
+        /// The telnet server.
+        node: Node,
+        /// The SSH server the connection went through.
+        via: Option<Node>,
+        /// Why: the I/O error, or the SSH server's refusal.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// A telnet connection was not made within its time limit.
+    #[cfg(feature = "telnet")]
+    #[error("{node}: the telnet connection timed out after {after:?}{}", through(via.as_ref()))]
+    TelnetTimeout {
+        /// The telnet server.
+        node: Node,
+        /// The SSH server the connection went through.
+        via: Option<Node>,
+        /// The time limit that was exceeded.
+        after: Duration,
+    },
+
+    /// A telnet server accepted the connection, then sent nothing within the time limit.
+    /// A QEMU serial console serves one client at a time and treats a second one this way,
+    /// so the console is most likely held by another session.
+    #[cfg(feature = "telnet")]
+    #[error("{node}: the console is in use; it sent nothing within {after:?}")]
+    TelnetInUse {
+        /// The telnet server.
+        node: Node,
+        /// How long Jato waited.
+        after: Duration,
+    },
+
+    /// A telnet connection closed: the server closed it before saying anything, or it was
+    /// closed or broken when Jato read or sent.
+    #[cfg(feature = "telnet")]
+    #[error("{node}: the telnet connection closed")]
+    TelnetClosed {
+        /// The telnet server.
+        node: Node,
+        /// The I/O error.
+        #[source]
+        source: io::Error,
+    },
+
     /// The SSH protocol failed with a server.
     #[error("SSH protocol error with {node}")]
     Protocol {
@@ -265,6 +316,15 @@ impl Error {
     }
 }
 
+/// ` through <node>`, for an error on a connection made through an SSH server.
+#[cfg(feature = "telnet")]
+fn through(via: Option<&Node>) -> String {
+    match via {
+        Some(via) => format!(" through {via}"),
+        None => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error as _;
@@ -315,5 +375,60 @@ mod tests {
             "SSH protocol error with [2001:db8::1]:22"
         );
         assert_eq!(error.source().unwrap().to_string(), "unexpected packet");
+    }
+
+    #[cfg(feature = "telnet")]
+    #[test]
+    fn telnet_refused_names_the_ssh_server_it_went_through() {
+        let direct = Error::TelnetRefused {
+            node: Node::new("127.127.1.2", 2323),
+            via: None,
+            source: Box::new(io::Error::from(io::ErrorKind::ConnectionRefused)),
+        };
+        assert_eq!(
+            direct.to_string(),
+            "127.127.1.2:2323: the telnet connection was refused"
+        );
+        let tunnelled = Error::TelnetRefused {
+            node: Node::new("127.127.1.2", 2323),
+            via: Some(Node::new("sherpa-server", 22)),
+            source: Box::new(io::Error::other("connect failed")),
+        };
+        assert_eq!(
+            tunnelled.to_string(),
+            "127.127.1.2:2323: the telnet connection was refused through sherpa-server:22"
+        );
+        assert_eq!(tunnelled.source().unwrap().to_string(), "connect failed");
+    }
+
+    #[cfg(feature = "telnet")]
+    #[test]
+    fn telnet_timeout_in_use_and_closed_name_the_console() {
+        let node = Node::new("127.127.1.2", 2323);
+        let timeout = Error::TelnetTimeout {
+            node: node.clone(),
+            via: None,
+            after: Duration::from_secs(10),
+        };
+        assert_eq!(
+            timeout.to_string(),
+            "127.127.1.2:2323: the telnet connection timed out after 10s"
+        );
+        let in_use = Error::TelnetInUse {
+            node: node.clone(),
+            after: Duration::from_secs(3),
+        };
+        assert_eq!(
+            in_use.to_string(),
+            "127.127.1.2:2323: the console is in use; it sent nothing within 3s"
+        );
+        let closed = Error::TelnetClosed {
+            node,
+            source: io::Error::from(io::ErrorKind::ConnectionReset),
+        };
+        assert_eq!(
+            closed.to_string(),
+            "127.127.1.2:2323: the telnet connection closed"
+        );
     }
 }
