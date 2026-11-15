@@ -133,11 +133,14 @@ pub(crate) struct Local {
     pub(crate) user: Option<String>,
 }
 
-/// Work out the settings for `alias` from `entries`.
+/// Work out the settings for `alias` from `entries`. `given_user`, the user of a `ProxyJump`
+/// entry such as `admin@jump`, overrides `User` and the local user, as in OpenSSH, so a jump
+/// host given one needs neither.
 pub(crate) fn resolve_host(
     entries: &[Entry],
     alias: &str,
     local: &Local,
+    given_user: Option<&str>,
 ) -> Result<HostConfig, Error> {
     let mut found: Vec<&Entry> = Vec::new();
     let mut identity_entries: Vec<&Entry> = Vec::new();
@@ -181,10 +184,11 @@ pub(crate) fn resolve_host(
         })?,
         None => DEFAULT_PORT,
     };
-    let user = match (first("user"), &local.user) {
-        (Some(entry), _) => one(entry)?.to_string(),
-        (None, Some(user)) => user.clone(),
-        (None, None) => {
+    let user = match (given_user, first("user"), &local.user) {
+        (Some(user), _, _) => user.to_string(),
+        (None, Some(entry), _) => one(entry)?.to_string(),
+        (None, None, Some(user)) => user.clone(),
+        (None, None, None) => {
             return Err(Error::SshConfig {
                 context: alias.to_string(),
                 message: "no User is configured and the local user name is unknown".into(),
@@ -427,10 +431,7 @@ fn jumps_of(
                 message: format!("ProxyJump loop: {} -> {}", chain.join(" -> "), jump.host),
             });
         }
-        let mut config = resolve_host(entries, &jump.host, local)?;
-        if let Some(user) = &jump.user {
-            config.user.clone_from(user);
-        }
+        let mut config = resolve_host(entries, &jump.host, local, jump.user.as_deref())?;
         if let Some(port) = jump.port {
             config.port = port;
         }
@@ -599,7 +600,7 @@ Host 192.0.2.21 ios01.abcd1234 ios01.abcd1234.sherpa.lab.local
             "ios01.abcd1234.sherpa.lab.local",
             "192.0.2.21",
         ] {
-            let host = resolve_host(&entries, alias, &local()).unwrap();
+            let host = resolve_host(&entries, alias, &local(), None).unwrap();
             assert_eq!(host.hostname, "192.0.2.21");
             assert_eq!(host.port, 22);
             assert_eq!(host.user, "sherpa");
@@ -625,7 +626,7 @@ Host 192.0.2.21 ios01.abcd1234 ios01.abcd1234.sherpa.lab.local
 
     #[test]
     fn defaults_apply_when_nothing_matches() {
-        let host = resolve_host(&entries(SHERPA_LAB), "elsewhere", &local()).unwrap();
+        let host = resolve_host(&entries(SHERPA_LAB), "elsewhere", &local(), None).unwrap();
         assert_eq!(host.hostname, "elsewhere");
         assert_eq!(host.port, 22);
         assert_eq!(host.user, "me");
@@ -663,7 +664,7 @@ Host *
     IdentityFile ~/.ssh/two
 ",
         );
-        let host = resolve_host(&config, "router1", &local()).unwrap();
+        let host = resolve_host(&config, "router1", &local(), None).unwrap();
         assert_eq!(host.user, "first");
         assert_eq!(host.port, 2222);
         assert_eq!(
@@ -679,11 +680,15 @@ Host *
     fn negated_patterns_exclude_hosts() {
         let config = entries("Host *.lab !core.lab\n    User lab\n");
         assert_eq!(
-            resolve_host(&config, "edge.lab", &local()).unwrap().user,
+            resolve_host(&config, "edge.lab", &local(), None)
+                .unwrap()
+                .user,
             "lab"
         );
         assert_eq!(
-            resolve_host(&config, "core.lab", &local()).unwrap().user,
+            resolve_host(&config, "core.lab", &local(), None)
+                .unwrap()
+                .user,
             "me"
         );
     }
@@ -700,7 +705,7 @@ Host r1
     UserKnownHostsFile %d/known/%h
 ",
         );
-        let host = resolve_host(&config, "r1", &local()).unwrap();
+        let host = resolve_host(&config, "r1", &local(), None).unwrap();
         assert_eq!(host.hostname, "r1.example.net");
         assert_eq!(
             host.identity_files,
@@ -724,7 +729,7 @@ Host node.lab
     GlobalKnownHostsFile none
 ",
         );
-        let host = resolve_host(&config, "node.lab", &local()).unwrap();
+        let host = resolve_host(&config, "node.lab", &local(), None).unwrap();
         assert_eq!(
             host.known_hosts,
             [
@@ -746,14 +751,14 @@ Host off
     ServerAliveInterval 0
 ",
         );
-        let on = resolve_host(&config, "on", &local()).unwrap();
+        let on = resolve_host(&config, "on", &local(), None).unwrap();
         assert_eq!(on.server_alive_interval, Some(Duration::from_secs(15)));
         assert_eq!(on.server_alive_count_max, Some(5));
         assert!(on.unsupported.is_empty(), "{:?}", on.unsupported);
-        let off = resolve_host(&config, "off", &local()).unwrap();
+        let off = resolve_host(&config, "off", &local(), None).unwrap();
         assert_eq!(off.server_alive_interval, Some(Duration::ZERO));
         assert_eq!(off.server_alive_count_max, None);
-        let unset = resolve_host(&config, "other", &local()).unwrap();
+        let unset = resolve_host(&config, "other", &local(), None).unwrap();
         assert_eq!(unset.server_alive_interval, None);
     }
 
@@ -770,17 +775,17 @@ Host c
     StrictHostKeyChecking off
 ",
         );
-        let a = resolve_host(&config, "a", &local()).unwrap();
+        let a = resolve_host(&config, "a", &local(), None).unwrap();
         assert_eq!(a.strict_host_key_checking, StrictHostKeyChecking::AcceptNew);
         assert_eq!(a.connect_timeout, Some(Duration::from_secs(7)));
         assert_eq!(
-            resolve_host(&config, "b", &local())
+            resolve_host(&config, "b", &local(), None)
                 .unwrap()
                 .strict_host_key_checking,
             StrictHostKeyChecking::Yes
         );
         assert_eq!(
-            resolve_host(&config, "c", &local())
+            resolve_host(&config, "c", &local(), None)
                 .unwrap()
                 .strict_host_key_checking,
             StrictHostKeyChecking::No
@@ -799,13 +804,13 @@ Host legacy-list
     MACs hmac-sha2-256,hmac-sha1
 ",
         );
-        let modern = resolve_host(&config, "modern", &local()).unwrap();
+        let modern = resolve_host(&config, "modern", &local(), None).unwrap();
         assert!(!modern.legacy_algorithms);
-        let removing = resolve_host(&config, "removing", &local()).unwrap();
+        let removing = resolve_host(&config, "removing", &local(), None).unwrap();
         assert!(!removing.legacy_algorithms);
         assert_eq!(removing.unsupported, ["ciphers"]);
         assert!(
-            resolve_host(&config, "legacy-list", &local())
+            resolve_host(&config, "legacy-list", &local(), None)
                 .unwrap()
                 .legacy_algorithms
         );
@@ -823,7 +828,7 @@ Host *
     Compression yes
 ",
         );
-        let host = resolve_host(&config, "x", &local()).unwrap();
+        let host = resolve_host(&config, "x", &local(), None).unwrap();
         assert_eq!(
             host.unsupported,
             ["proxycommand", "forwardagent", "compression"]
@@ -833,12 +838,12 @@ Host *
     #[test]
     fn bad_values_are_errors_naming_the_line() {
         let bad_port = entries("Host x\n    Port many\n");
-        let error = resolve_host(&bad_port, "x", &local()).unwrap_err();
+        let error = resolve_host(&bad_port, "x", &local(), None).unwrap_err();
         assert!(error.to_string().contains("test:2"), "{error}");
         let bad_token = entries("Host x\n    IdentityFile ~/%z\n");
-        assert!(resolve_host(&bad_token, "x", &local()).is_err());
+        assert!(resolve_host(&bad_token, "x", &local(), None).is_err());
         let bad_choice = entries("Host x\n    IdentitiesOnly maybe\n");
-        assert!(resolve_host(&bad_choice, "x", &local()).is_err());
+        assert!(resolve_host(&bad_choice, "x", &local(), None).is_err());
     }
 
     #[test]
@@ -847,9 +852,12 @@ Host *
             home: PathBuf::from("/home/me"),
             user: None,
         };
-        assert!(resolve_host(&entries(""), "x", &no_user).is_err());
+        assert!(resolve_host(&entries(""), "x", &no_user, None).is_err());
         let config = entries("Host x\n    User given\n");
-        assert_eq!(resolve_host(&config, "x", &no_user).unwrap().user, "given");
+        assert_eq!(
+            resolve_host(&config, "x", &no_user, None).unwrap().user,
+            "given"
+        );
     }
 
     #[test]
@@ -903,7 +911,7 @@ Host bastion
     HostName 10.0.0.9
 ",
         );
-        let target = resolve_host(&config, "target", &local()).unwrap();
+        let target = resolve_host(&config, "target", &local(), None).unwrap();
         let jumps = resolve_jumps(&config, &target, &local()).unwrap();
         let summary: Vec<_> = jumps
             .iter()
@@ -920,9 +928,36 @@ Host bastion
     }
 
     #[test]
+    fn a_jump_host_user_needs_no_local_user() {
+        // A Windows desktop session sets USERNAME, not USER, and older Jato found no local
+        // user there; the user in ProxyJump is all a jump host needs.
+        let config = entries("Host target\n    User sherpa\n    ProxyJump dev@192.0.2.1\n");
+        let local = Local {
+            home: PathBuf::from("/home/me"),
+            user: None,
+        };
+        let target = resolve_host(&config, "target", &local, None).unwrap();
+        let jumps = resolve_jumps(&config, &target, &local).unwrap();
+        assert_eq!(jumps.len(), 1);
+        assert_eq!(jumps[0].hostname, "192.0.2.1");
+        assert_eq!(jumps[0].user, "dev");
+    }
+
+    #[test]
+    fn a_given_user_overrides_the_configured_one_and_its_token() {
+        let config = entries("Host jump\n    User configured\n    IdentityFile ~/.ssh/%r\n");
+        let host = resolve_host(&config, "jump", &local(), Some("given")).unwrap();
+        assert_eq!(host.user, "given");
+        assert_eq!(
+            host.identity_files,
+            vec![PathBuf::from("/home/me/.ssh/given")]
+        );
+    }
+
+    #[test]
     fn jump_loops_are_refused() {
         let config = entries("Host a\n    ProxyJump b\nHost b\n    ProxyJump a\n");
-        let target = resolve_host(&config, "a", &local()).unwrap();
+        let target = resolve_host(&config, "a", &local(), None).unwrap();
         let error = resolve_jumps(&config, &target, &local()).unwrap_err();
         assert!(error.to_string().contains("loop"), "{error}");
     }

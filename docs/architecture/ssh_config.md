@@ -68,9 +68,15 @@ The rules, as in OpenSSH:
 - `HostName` takes `%h` (the alias) and `%%`. `IdentityFile` and `UserKnownHostsFile` take
   `%h` (the host name), `%n` (the alias), `%p`, `%r` (remote user), `%u` (local user), `%d`
   (home) and `%%`, a leading `~`, and `${VAR}`. An unknown token or unset variable is an error.
+- The local user, for `%u` and for a host with no `User`, is `USER`, then `LOGNAME`, then
+  `USERNAME`. A Windows desktop session (Windows Terminal, conhost) sets only `USERNAME`;
+  Win32-OpenSSH's `sshd` sets all three, so a test driven over SSH does not show the
+  difference. With none set, a host that needs the local user is an error.
 - `ProxyJump` is `none` or a comma-separated list of `[user@]host[:port]`, with IPv6
   addresses in brackets. Each jump host is resolved by its own name, so its `Host` block
-  applies; a user or port in the entry overrides it. The first jump host's own `ProxyJump`
+  applies; a user or port in the entry overrides it. The entry's user is applied while the
+  host is resolved, so it also sets `%r`, and a jump host given one needs no `User` and no
+  local user. The first jump host's own `ProxyJump`
   is followed (as `ssh` reaches it with its own configuration); later jump hosts' are not,
   as in OpenSSH. A loop, or more than 16 jumps, is an error.
 
