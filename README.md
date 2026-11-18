@@ -41,6 +41,9 @@ Jato is in early development; the plan for v1 is
   (raw mode, resizes, `~.`, Windows consoles included), with no `unsafe` code. By default it
   prints a line on stderr naming the escape when the shell opens, and another when it
   closes; `InteractiveOptions::banner` turns them off for a program that prints its own.
+  `pass_through` runs the same loop over a byte stream the caller supplies by implementing
+  `Transport` (receive, send, close), for example a serial console relayed over a
+  WebSocket, with the console's escapes (`Ctrl+]` or `~.`).
 - With the `telnet` feature: `Telnet`, a telnet client for serial consoles such as QEMU's,
   over TCP or through an SSH server's `direct-tcpip` channel (`Telnet::connect_via`), with
   time limits, an "in use" error for a console another client holds, breaks
@@ -95,7 +98,7 @@ async fn from_config() -> Result<(), jato::Error> {
 ```
 
 As an `ssh` client, with the `terminal` feature
-(`jato = { git = "https://github.com/bwks/jato-lib", tag = "v0.5.1", features = ["terminal"] }`):
+(`jato = { git = "https://github.com/bwks/jato-lib", tag = "v0.6.0", features = ["terminal"] }`):
 asking on the terminal about an unknown server and for passphrases, then a shell.
 
 ```rust,ignore
@@ -129,6 +132,26 @@ async fn console(server: &str, host: &str, port: u16) -> Result<bool, jato::Erro
     eprintln!("\nConsole of {host} {}.", if ended.escaped { "left" } else { "closed" });
     drop(telnet);
     session.close().await?;
+    Ok(ended.escaped)
+}
+```
+
+A serial console over a byte stream of the caller's own, with the `terminal` feature only;
+`Relay` stands for, say, a WebSocket that carries the console's bytes as binary frames:
+
+```rust,ignore
+use std::io;
+use jato::{InteractiveOptions, Transport, pass_through};
+
+impl Transport for Relay {
+    // Must be cancel safe: Jato drops a pending call when a key is typed.
+    async fn receive(&mut self) -> io::Result<Option<Vec<u8>>> { self.next_frame().await }
+    async fn send(&mut self, bytes: &[u8]) -> io::Result<()> { self.send_frame(bytes).await }
+    async fn close(&mut self) -> io::Result<()> { self.send_close().await }
+}
+
+async fn console(relay: &mut Relay) -> Result<bool, jato::Error> {
+    let ended = pass_through(relay, "alp01", &InteractiveOptions::default()).await?;
     Ok(ended.escaped)
 }
 ```

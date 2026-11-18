@@ -1,9 +1,10 @@
 # The terminal feature
 
 What the optional `terminal` feature adds, for programs that act as an `ssh` client: asking
-on the terminal while connecting (`TerminalPrompter`), and running a shell in the local
-terminal (`Session::interactive_shell`). With the `telnet` feature too, the same loop runs
-a serial console (`Telnet::interactive`, see [telnet.md](telnet.md)). The code is in `src/terminal/`. Without the feature
+on the terminal while connecting (`TerminalPrompter`), running a shell in the local
+terminal (`Session::interactive_shell`), and running the same loop over a byte stream the
+caller supplies (`pass_through` over a `Transport`). With the `telnet` feature too, the
+same loop runs a serial console (`Telnet::interactive`, see [telnet.md](telnet.md)). The code is in `src/terminal/`. Without the feature
 Jato has no terminal dependency; with it, it adds `crossterm`, `rpassword` and, on Windows,
 `crossterm_winapi`, which crossterm already uses.
 
@@ -49,6 +50,7 @@ are the banner lines:
 | ------- | ------------------------------------ | ---------- | -------- |
 | `Session::interactive_shell` | `Escape::TildeDot` | `Connected to <host:port>. Escape: ~. at the start of a line.` | `Connection to <host:port> closed.` |
 | `Telnet::interactive` | `Escape::TildeDotOrCtrlBracket` | `Connected to <host:port>. Escape: Ctrl+] or ~. at the start of a line.` | `Connection to <host:port> closed.` |
+| `pass_through` | `Escape::TildeDotOrCtrlBracket` | `Connected to <name>. Escape: Ctrl+] or ~. at the start of a line.` | `Connection to <name> closed.` |
 
 After an escape an empty line comes first, as the cursor is usually on the remote prompt.
 A banner that cannot be written is logged and ignored.
@@ -68,12 +70,14 @@ the remote PTY, and exist without the `terminal` feature, while the banner is ab
 local terminal, and the same for both kinds of session.
 
 `run` is split for testing: `connected` and `closed` write the banner lines to any writer,
-and `relay`, the loop itself, takes the key channel, the resize watcher and the output
-writer as arguments, so unit tests drive it with a scripted session and queued key
-presses, with no terminal. `run` adds the real terminal around it: stderr for the banner,
+and `relay`, the loop itself, takes the key channel, the resize watcher, the output
+writer and the raw-mode guard as arguments, so unit tests drive it with a scripted
+transport and queued key presses, with no terminal, and check that the guard is dropped
+however the loop ends. `relay` drops the guard before it returns, so the closing banner is
+written outside raw mode. `run` adds the real terminal around it: stderr for the banner,
 raw mode, the key thread and stdout. The trait's methods are `async fn`;
-the loop is generic over it, not `dyn`, so both interactive futures stay `Send` (a unit
-test checks each).
+the loop is generic over it, not `dyn`, so the interactive futures stay `Send` (a unit
+test checks each of the three).
 
 It returns a `ShellEnd`: the shell's `Exit` (`Unknown` after `~.` or if none was reported) and
 whether `~.` ended it. `ShellEnd::exit_code` is the code `ssh` exits with: the status if it
@@ -105,7 +109,7 @@ fits in a byte, else 255.
 sequenceDiagram
     participant K as Key thread (stdin)
     participant L as passthrough::run
-    participant S as Shell or Telnet
+    participant S as Shell, Telnet or a Transport
     participant R as Server
     L->>L: banner on stderr; RawMode::enable (VT modes on Windows)
     K->>L: typed bytes
@@ -117,6 +121,38 @@ sequenceDiagram
     L->>L: stdout; on None, restore the terminal; closing banner
 ```
 
+## A caller's own transport
+
+`pass_through(transport, name, options)` is the same `passthrough::run` over a byte stream
+the caller supplies, for a console that is neither an SSH channel nor telnet: Sherpa relays
+a node's serial console over its API's WebSocket, raw bytes with no telnet, and runs this
+loop on the client. The caller implements the public `Transport` trait:
+
+| Method | Called | Contract |
+| ------ | ------ | -------- |
+| `receive` | in the loop, as `Passthrough::next_event` | the next bytes (one frame), `None` once the far side closed; cancel safe, as the loop drops a pending call when a key is typed |
+| `send` | for each read of typed bytes, after the escape filter | send all of them |
+| `close` | once, after the escape or a failure; never after the far side closed | end the stream from this side |
+
+Errors are the transport's own `io::Error`, which `pass_through` wraps as
+`Error::Transport { name, operation, source }`. A close failure after the escape is
+returned; after another failure it is logged and the first failure is returned.
+
+The methods are declared as `fn ... -> impl Future<Output = ...> + Send`, not `async fn`, so
+the futures are `Send` for every implementation (the `async_fn_in_trait` lint asks for this
+on a public trait) and the session can be spawned; implementations still write `async fn`.
+
+Inside, a private adapter, `Remote { transport, name }`, implements the crate-private
+`Passthrough` for any `Transport`: bytes become `Event::Stdout`, `resize` does nothing, and
+errors get the transport's name. `finish` then decides whether to call `close`. The window
+size is not passed on: a serial console has none, and the WebSocket carries only the
+console's bytes. The escapes are the console's (`Ctrl+]` or `~.`) and are fixed.
+
+`Shell` and `Telnet` keep their own `Passthrough` implementations: they need what a
+`Transport` has no place for (an exit status, a window size), and their close is the
+caller dropping them, as before. The one change to their path is that the banner takes any
+`Display` name instead of a `Node`, which prints the same `host:port`.
+
 ## No unsafe code
 
 `windows.rs` reads and sets the console modes through `crossterm_winapi` (`Handle::input_handle`,
@@ -127,9 +163,14 @@ constants in `windows.rs`.
 ## Testing
 
 The questions, the answer rules, the escape filter (both escapes) and exit codes have unit
-tests (`cargo test --all-features`). So does the loop: the banner lines with the banner on
-and none with it off, and `relay` with each escape, `Ctrl+]` reaching a shell, output and
-the exit status. The banner is not an input to `relay`, so the escapes work the same with it
+tests (`cargo test --all-features`). So does the loop, over a scripted `Transport`: the
+banner lines with the banner on and none with it off, a transport's name in them, bytes
+both ways until the far side closes (no `close`), each escape (`close` called), `Ctrl+]`
+reaching a shell, a receive error and a send error (returned as `Error::Transport`,
+`close` called), close errors after the escape (returned) and after a failure (the failure
+kept), a terminal write error, and the exit status through a scripted shell. Each checks
+that the raw-mode guard was dropped. A unit test checks that the `pass_through` future is
+`Send`. The banner is not an input to `relay`, so the escapes work the same with it
 on or off; `examples/console.rs --no-banner` was also driven in a pseudo-terminal with each
 escape. The shell itself needs a real terminal, so it is tested by
 hand: Sherpa's `sherpa ssh` uses it, and has been driven in a Linux pseudo-terminal and in a

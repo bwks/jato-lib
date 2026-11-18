@@ -6,8 +6,10 @@ wildcard arm. There is no `Result` alias.
 
 ## What an error carries
 
-The `Telnet*` variants exist only with the `telnet` feature. Every variant names the `Node` it concerns (except `Io`, `InvalidPrompt` and `SshConfig`,
-which may happen before there is one) and what was being done, so an error read on its own says where
+The `Telnet*` variants exist only with the `telnet` feature, and `Transport` only with
+`terminal`. Every variant names the `Node` it concerns (except `Io`, `InvalidPrompt` and
+`SshConfig`, which may happen before there is one, and `Transport`, which names the caller's
+transport by the name it gave) and what was being done, so an error read on its own says where
 and what. The underlying cause, where there is one, is kept as the `source`.
 
 An error never holds a secret. It does not hold:
@@ -57,6 +59,9 @@ graph LR
         TelnetInUse
         TelnetClosed
     end
+    subgraph Terminal
+        Transport
+    end
     subgraph Devices
         DeviceCommand
     end
@@ -89,6 +94,7 @@ graph LR
 | `TelnetTimeout` | With `telnet`: no connection, or no tunnel from the SSH server, within `TelnetOptions::connect_timeout` |
 | `TelnetInUse` | With `telnet`: connected, then nothing within `negotiation_timeout`; a QEMU console treats a second client this way |
 | `TelnetClosed` | With `telnet`: the server closed before sending anything, or the connection was closed or broken while reading or sending |
+| `Transport` | With `terminal`: a caller's `Transport` fails in `pass_through` while `receiving`, `sending` or `closing`; the source is the transport's `io::Error` |
 | `DeviceCommand` | A device reports an error, a shell command exits non-zero, or a step (enable, configuration, commit) does not do what was asked |
 
 ## Inside the crate
