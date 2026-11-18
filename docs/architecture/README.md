@@ -14,7 +14,7 @@ its document here, or add one and list it below.
 | [sftp.md](sftp.md) | File transfer with Jato's own SFTP client, and safe uploads |
 | [ssh_config.md](ssh_config.md) | Reading OpenSSH client configuration into hops and routes |
 | [shell.md](shell.md) | Interactive shells on a PTY, prompt matching and discovery |
-| [terminal.md](terminal.md) | The `terminal` feature: asking on the terminal, and `ssh host` in the local terminal |
+| [terminal.md](terminal.md) | The `terminal` feature: asking on the terminal, `ssh host` in the local terminal, and a caller's transport in it |
 | [telnet.md](telnet.md) | The `telnet` feature: serial consoles over telnet, directly or through an SSH server; what QEMU does |
 | [device.md](device.md) | Device CLIs: profiles, modes, enable, configuration |
 | [errors.md](errors.md) | The error type and what errors may and may not contain |

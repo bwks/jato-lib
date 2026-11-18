@@ -243,6 +243,22 @@ pub enum Error {
         source: io::Error,
     },
 
+    /// A caller's [`Transport`](crate::Transport) failed while [`pass_through`] received,
+    /// sent or closed. The source is the transport's own error.
+    ///
+    /// [`pass_through`]: crate::pass_through
+    #[cfg(feature = "terminal")]
+    #[error("{name}: the connection failed while {operation}")]
+    Transport {
+        /// The name the caller gave the transport.
+        name: String,
+        /// What was being done: `receiving`, `sending` or `closing`.
+        operation: &'static str,
+        /// The transport's error.
+        #[source]
+        source: io::Error,
+    },
+
     /// The SSH protocol failed with a server.
     #[error("SSH protocol error with {node}")]
     Protocol {
@@ -430,5 +446,21 @@ mod tests {
             closed.to_string(),
             "127.127.1.2:2323: the telnet connection closed"
         );
+    }
+
+    #[cfg(feature = "terminal")]
+    #[test]
+    fn transport_names_the_transport_and_keeps_the_source() {
+        let error = Error::Transport {
+            name: "alp01".into(),
+            operation: "receiving",
+            source: io::Error::from(io::ErrorKind::ConnectionReset),
+        };
+        assert_eq!(
+            error.to_string(),
+            "alp01: the connection failed while receiving"
+        );
+        let source = error.source().unwrap().downcast_ref::<io::Error>().unwrap();
+        assert_eq!(source.kind(), io::ErrorKind::ConnectionReset);
     }
 }

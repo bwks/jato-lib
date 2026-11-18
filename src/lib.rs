@@ -32,7 +32,7 @@ pub use telnet::client::{Telnet, TelnetOptions};
 #[cfg(all(feature = "telnet", feature = "terminal"))]
 pub use telnet::interactive::TelnetEnd;
 #[cfg(feature = "terminal")]
-pub use terminal::passthrough::InteractiveOptions;
+pub use terminal::passthrough::{InteractiveOptions, Transport, TransportEnd, pass_through};
 #[cfg(feature = "terminal")]
 pub use terminal::prompter::TerminalPrompter;
 #[cfg(feature = "terminal")]
